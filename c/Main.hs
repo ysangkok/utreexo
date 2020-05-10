@@ -16,6 +16,8 @@ import Data.List (inits)
 
 import Data.Bits
 
+import Debug.Trace
+
 foreign import ccall "libutreexo.h"
     cForestPrint
     :: Ptr CForest
@@ -46,12 +48,27 @@ foreign import ccall "libutreexo.h &cForestFree"
 
 parentMany :: Word64 -> Int -> Int -> Word64
 parentMany position rise forestRows =
+        -- 18       6    2
+        -- example of underflowing innerMask above
   let
+    mask :: Word64
     mask = 2 `shiftL` forestRows - 1
+    innerMask :: Int
     innerMask = forestRows - rise + 1
-    unmasked = position `shiftR` rise .|. mask `shiftL` innerMask
   in
-    unmasked .&. mask
+    mask .&.
+      -- in the go version, innerMask is a uint64, so if rise > forestRows + 1,
+      -- it will be e.g. uint(-1), which will be a really large number
+      -- so in effect, a no-op, which is what we do here
+      case (innerMask < 0, rise < 0) of
+        (True, False) ->
+          position `shiftR` rise -- triggered by 'parentMany extreme'
+        (False, False) ->
+          position `shiftR` rise .|. mask `shiftL` innerMask
+        (True, True) ->
+          error "noo"
+        (False, True) ->
+          0 --mask `shiftL` innerMask
 
 getRootsReverse :: Word64 -> Int -> ([Word64], [Int])
 getRootsReverse leaves forestRows =
@@ -108,6 +125,8 @@ tests = testGroup "tests"
      getRootsReverse 1 5 @?= ([0], [0])
   , testCase "getRootsReverse 0 5" $
      getRootsReverse 0 5 @?= ([], [])
+  , testCase "parentMany extreme" $
+     parentMany 18 6 2 @?= 0
   ]
 
 printTree :: Forest -> IO ()
@@ -202,39 +221,39 @@ extractTwins nodes row =
 tests2 :: TestTree
 tests2 = testGroup "tests2"
   [ 
-     testCase "  1" $	extractTwins [0, 1, 2, 3, 4, 7, 10, 13, 14, 20, 22, 23] 5 @?= ([32, 33, 43], [4, 7, 10, 13, 14, 20])
-   , testCase "  2" $	extractTwins [0, 1, 2, 5, 6, 7, 14, 18, 21, 22, 23, 24, 25] 5 @?= ([32, 35, 43, 44], [2, 5, 14, 18, 21])
-   , testCase "  3" $	extractTwins [0, 1, 3, 5, 7, 8, 10, 12, 13] 4 @?= ([16, 22], [3, 5, 7, 8, 10])
-   , testCase "  4" $	extractTwins [0] 2 @?= ([], [0])
-   , testCase "  5" $	extractTwins [0, 3, 5, 7, 8, 10, 11, 12, 13, 14, 16, 21, 22, 24] 5 @?= ([37, 38], [0, 3, 5, 7, 8, 14, 16, 21, 22, 24])
-   , testCase "  6" $	extractTwins [0, 5, 6, 7, 8, 10, 11, 14, 15, 16, 17, 18, 21] 5 @?= ([35, 37, 39, 40], [0, 5, 8, 18, 21])
-   , testCase "  7" $	extractTwins [114, 115] 6 @?= ([121], [])
-   , testCase "  8" $	extractTwins [121] 6 @?= ([], [121])
-   , testCase "  9" $	extractTwins [1, 2, 4, 7, 11, 12, 15, 19] 5 @?= ([], [1, 2, 4, 7, 11, 12, 15, 19])
-   , testCase " 10" $	extractTwins [1] 4 @?= ([], [1])
-   , testCase " 11" $	extractTwins [16, 18, 20, 21] 4 @?= ([26], [16, 18])
-   , testCase " 12" $	extractTwins [16] 4 @?= ([], [16])
-   , testCase " 13" $	extractTwins [] 2 @?= ([], [])
-   , testCase " 14" $	extractTwins [24] 4 @?= ([], [24])
-   , testCase " 15" $	extractTwins [25] 4 @?= ([], [25])
-   , testCase " 16" $	extractTwins [32, 33, 35, 38, 42, 43] 5 @?= ([48, 53], [35, 38])
-   , testCase " 17" $	extractTwins [32, 34, 35, 41, 42, 43] 5 @?= ([49, 53], [32, 41])
-   , testCase " 18" $	extractTwins [33, 35, 37, 38, 39, 42] 5 @?= ([51], [33, 35, 37, 42])
-   , testCase " 19" $	extractTwins [33, 35, 38, 41] 5 @?= ([], [33, 35, 38, 41])
-   , testCase " 20" $	extractTwins [34, 35, 37, 39, 40, 41] 5 @?= ([49, 52], [37, 39])
-   , testCase " 21" $	extractTwins [] 4 @?= ([], [])
-   , testCase " 22" $	extractTwins [48, 51, 53] 5 @?= ([], [48, 51, 53])
-   , testCase " 23" $	extractTwins [49, 51, 53] 5 @?= ([], [49, 51, 53])
-   , testCase " 24" $	extractTwins [49, 51] 5 @?= ([], [49, 51])
-   , testCase " 25" $	extractTwins [49, 52, 53] 5 @?= ([58], [49])
-   , testCase " 26" $	extractTwins [49] 5 @?= ([], [49])
-   , testCase " 27" $	extractTwins [] 5 @?= ([], [])
-   , testCase " 28" $	extractTwins [56] 5 @?= ([], [56])
-   , testCase " 29" $	extractTwins [57] 5 @?= ([], [57])
-   , testCase " 30" $	extractTwins [] 6 @?= ([], [])
-   , testCase " 31" $	extractTwins [68, 69, 72, 74, 76, 77, 80, 81] 6 @?= ([98, 102, 104], [72, 74])
-   , testCase " 32" $	extractTwins [6, 8, 9, 10, 16, 17, 18, 20, 24, 25, 26, 27, 30, 32, 33, 34, 35, 37] 6 @?= ([68, 72, 76, 77, 80, 81], [6, 10, 18, 20, 30, 37])
-   , testCase " 33" $	extractTwins [98, 101, 102] 6 @?= ([], [98, 101, 102])
+     testCase "  1" $ extractTwins [0, 1, 2, 3, 4, 7, 10, 13, 14, 20, 22, 23] 5 @?= ([32, 33, 43], [4, 7, 10, 13, 14, 20])
+   , testCase "  2" $ extractTwins [0, 1, 2, 5, 6, 7, 14, 18, 21, 22, 23, 24, 25] 5 @?= ([32, 35, 43, 44], [2, 5, 14, 18, 21])
+   , testCase "  3" $ extractTwins [0, 1, 3, 5, 7, 8, 10, 12, 13] 4 @?= ([16, 22], [3, 5, 7, 8, 10])
+   , testCase "  4" $ extractTwins [0] 2 @?= ([], [0])
+   , testCase "  5" $ extractTwins [0, 3, 5, 7, 8, 10, 11, 12, 13, 14, 16, 21, 22, 24] 5 @?= ([37, 38], [0, 3, 5, 7, 8, 14, 16, 21, 22, 24])
+   , testCase "  6" $ extractTwins [0, 5, 6, 7, 8, 10, 11, 14, 15, 16, 17, 18, 21] 5 @?= ([35, 37, 39, 40], [0, 5, 8, 18, 21])
+   , testCase "  7" $ extractTwins [114, 115] 6 @?= ([121], [])
+   , testCase "  8" $ extractTwins [121] 6 @?= ([], [121])
+   , testCase "  9" $ extractTwins [1, 2, 4, 7, 11, 12, 15, 19] 5 @?= ([], [1, 2, 4, 7, 11, 12, 15, 19])
+   , testCase " 10" $ extractTwins [1] 4 @?= ([], [1])
+   , testCase " 11" $ extractTwins [16, 18, 20, 21] 4 @?= ([26], [16, 18])
+   , testCase " 12" $ extractTwins [16] 4 @?= ([], [16])
+   , testCase " 13" $ extractTwins [] 2 @?= ([], [])
+   , testCase " 14" $ extractTwins [24] 4 @?= ([], [24])
+   , testCase " 15" $ extractTwins [25] 4 @?= ([], [25])
+   , testCase " 16" $ extractTwins [32, 33, 35, 38, 42, 43] 5 @?= ([48, 53], [35, 38])
+   , testCase " 17" $ extractTwins [32, 34, 35, 41, 42, 43] 5 @?= ([49, 53], [32, 41])
+   , testCase " 18" $ extractTwins [33, 35, 37, 38, 39, 42] 5 @?= ([51], [33, 35, 37, 42])
+   , testCase " 19" $ extractTwins [33, 35, 38, 41] 5 @?= ([], [33, 35, 38, 41])
+   , testCase " 20" $ extractTwins [34, 35, 37, 39, 40, 41] 5 @?= ([49, 52], [37, 39])
+   , testCase " 21" $ extractTwins [] 4 @?= ([], [])
+   , testCase " 22" $ extractTwins [48, 51, 53] 5 @?= ([], [48, 51, 53])
+   , testCase " 23" $ extractTwins [49, 51, 53] 5 @?= ([], [49, 51, 53])
+   , testCase " 24" $ extractTwins [49, 51] 5 @?= ([], [49, 51])
+   , testCase " 25" $ extractTwins [49, 52, 53] 5 @?= ([58], [49])
+   , testCase " 26" $ extractTwins [49] 5 @?= ([], [49])
+   , testCase " 27" $ extractTwins [] 5 @?= ([], [])
+   , testCase " 28" $ extractTwins [56] 5 @?= ([], [56])
+   , testCase " 29" $ extractTwins [57] 5 @?= ([], [57])
+   , testCase " 30" $ extractTwins [] 6 @?= ([], [])
+   , testCase " 31" $ extractTwins [68, 69, 72, 74, 76, 77, 80, 81] 6 @?= ([98, 102, 104], [72, 74])
+   , testCase " 32" $ extractTwins [6, 8, 9, 10, 16, 17, 18, 20, 24, 25, 26, 27, 30, 32, 33, 34, 35, 37] 6 @?= ([68, 72, 76, 77, 80, 81], [6, 10, 18, 20, 30, 37])
+   , testCase " 33" $ extractTwins [98, 101, 102] 6 @?= ([], [98, 101, 102])
   ]
 
 swapIfDescendant :: (Word64, Word64) -> (Word64, Word64) -> Int -> Int -> Int -> Word64
@@ -268,14 +287,66 @@ tests3 = testGroup "tests3"
    , testCase "g" $ swapIfDescendant (56, 56) (52, 50) 3 2 5 @?= 0
    , testCase "h" $ swapIfDescendant (120, 120) (101, 100) 4 2 6 @?= 0
    , testCase "i" $ swapIfDescendant (24, 24) (12, 4) 2 0 4 @?= 0
+   , testCase "j" $ swapIfDescendant (100, 97) (41, 18) 6 0 2 @?= 0
+   , testCase "k" $ swapIfDescendant (52, 49) (24, 16) 2 0 5 @?= 20
   ]
 
--- TODO swapCollapses
+swapInRow :: (Word64, Word64) -> [Maybe (Word64, Word64)] -> Int -> [Maybe (Word64, Word64)]
+swapInRow s collapses r =
+    let
+      maybeUpdateTo idx (from, to) =
+          (from, newTo)
+        where
+          forestRows = length collapses
+          mask = swapIfDescendant s (from, to) r idx forestRows
+          newTo = to `xor` mask
+      fun (maybeSwap, idx) = fmap (maybeUpdateTo idx) maybeSwap
+    in
+      fmap fun (zip collapses [0..])
+
+tests4 :: TestTree
+tests4 = testGroup "tests4"
+  [
+    testCase "0" $ swapInRow (100, 97) [Just (41, 18), Just (79, 72), Nothing, Nothing, Just (120, 120), Nothing] 2 @?= [Just (41, 6), Just (79, 66), Nothing, Nothing, Just (120, 120), Nothing]
+  , testCase "1" $ swapInRow (66, 65) [Just (41, 4), Nothing, Nothing, Just (115, 114), Just (120, 120), Nothing] 1 @?= [Just (41, 2), Nothing, Nothing, Just (115, 114), Just (120, 120), Nothing]
+  , testCase "2" $ swapInRow (68, 66) [Just (42, 8), Nothing, Just (102, 100), Nothing, Just (120, 120), Nothing] 1 @?= [Just (42, 4), Nothing, Just (102, 100), Nothing, Just (120, 120), Nothing]
+  , testCase "3" $ swapInRow (35, 33) [Just (26, 6), Just (43, 34), Just (48, 48), Just (57, 56), Nothing] 1 @?= [Just (26, 2), Just (43, 34), Just (48, 48), Just (57, 56), Nothing]
+  , testCase "4" $ swapInRow (37, 33) [Just (28, 10), Just (44, 36), Just (51, 50), Just (56, 56), Nothing] 1 @?= [Just (28, 2), Just (44, 36), Just (51, 50), Just (56, 56), Nothing]
+  , testCase "5" $ swapInRow (57, 56) [Just (20, 14), Just (46, 38), Just (48, 50), Just (57, 56), Nothing] 3 @?= [Just (20, 6), Just (46, 34), Just (48, 48), Just (57, 56), Nothing]
+  , testCase "7" $ swapInRow (37, 35) [Just (22, 10), Just (41, 36), Just (51, 50), Just (56, 56), Nothing] 1 @?= [Just (22, 6), Just (41, 36), Just (51, 50), Just (56, 56), Nothing]
+  , testCase "8" $ swapInRow (51, 50) [Just (28, 14), Just (44, 38), Just (51, 50), Just (56, 56), Nothing] 2 @?= [Just (28, 10), Just (44, 36), Just (51, 50), Just (56, 56), Nothing]
+  , testCase "9" $ swapInRow (100, 97) [Just (41, 16), Nothing, Nothing, Just (115, 114), Just (120, 120), Nothing] 2 @?= [Just (41, 4), Nothing, Nothing, Just (115, 114), Just (120, 120), Nothing]
+  , testCase "a" $ swapInRow (101, 98) [Just (42, 20), Nothing, Just (102, 100), Nothing, Just (120, 120), Nothing] 2 @?= [Just (42, 8), Nothing, Just (102, 100), Nothing, Just (120, 120), Nothing]
+  , testCase "b" $ swapInRow (51, 50) [Just (22, 14), Just (41, 38), Just (51, 50), Just (56, 56), Nothing] 2 @?= [Just (22, 10), Just (41, 36), Just (51, 50), Just (56, 56), Nothing]
+  , testCase "c" $ swapInRow (100, 98) [Nothing, Just (77, 72), Nothing, Just (115, 114), Just (120, 120), Nothing] 2 @?= [Nothing, Just (77, 68), Nothing, Just (115, 114), Just (120, 120), Nothing]
+  , testCase "d" $ swapInRow (114, 113) [Nothing, Just (84, 74), Just (104, 100), Nothing, Just (120, 120), Nothing] 3 @?= [Nothing, Just (84, 70), Just (104, 98), Nothing, Just (120, 120), Nothing]
+  , testCase "f" $ swapInRow (115, 114) [Just (41, 24), Nothing, Nothing, Just (115, 114), Just (120, 120), Nothing] 3 @?= [Just (41, 16), Nothing, Nothing, Just (115, 114), Just (120, 120), Nothing]
+  , testCase "g" $ swapInRow (115, 114) [Nothing, Just (77, 76), Nothing, Just (115, 114), Just (120, 120), Nothing] 3 @?= [Nothing, Just (77, 72), Nothing, Just (115, 114), Just (120, 120), Nothing]
+  , testCase "h" $ swapInRow (71, 69) [Just (34, 14), Just (80, 70), Just (102, 98), Just (112, 112), Nothing, Nothing] 1 @?= [Just (34, 10), Just (80, 70), Just (102, 98), Just (112, 112), Nothing, Nothing]
+  , testCase "i" $ swapInRow (101, 97) [Just (43, 22), Just (84, 74), Just (103, 100), Nothing, Just (120, 120), Nothing] 2 @?= [Just (43, 6), Just (84, 66), Just (103, 100), Nothing, Just (120, 120), Nothing]
+  , testCase "j" $ swapInRow (4045, 4039) [Nothing, Just (2576, 2494), Just (3335, 3294), Just (3714, 3694), Just (3904, 3894), Just (3998, 3994), Just (4046, 4044), Nothing, Just (4082, 4082), Just (4088, 4088), Nothing] 6
+                   @?=
+                   [Nothing, Just (2576, 2302), Just (3335, 3198), Just (3714, 3646), Just (3904, 3870), Just (3998, 3982), Just (4046, 4044), Nothing, Just (4082, 4082), Just (4088, 4088), Nothing]
+  , testCase "k" $ swapInRow (3983, 3977) [Nothing, Just (2576, 2302), Just (3335, 3198), Just (3714, 3646), Just (3904, 3870), Just (3998, 3982), Just (4046, 4044), Nothing, Just (4082, 4082), Just (4088, 4088), Nothing] 5
+                   @?=
+                   [Nothing, Just (2576, 2206), Just (3335, 3150), Just (3714, 3622), Just (3904, 3858), Just (3998, 3982), Just (4046, 4044), Nothing, Just (4082, 4082), Just (4088, 4088), Nothing]
+  , testCase "l" $ swapInRow (52, 49) [Just (24, 16), Nothing, Nothing, Nothing, Nothing] 2 @?= [Just (24, 4), Nothing, Nothing, Nothing, Nothing]
+  , testCase "m" $ swapInRow (51, 50) [Just (22, 14), Just (42, 38), Just (51, 50), Just (56, 56), Nothing] 2 @?= [Just (22, 10), Just (42, 36), Just (51, 50), Just (56, 56), Nothing]
+  , testCase "n" $ swapInRow (101, 99) [Nothing, Just (82, 74), Just (103, 100), Nothing, Just (120, 120), Nothing] 2 @?= [Nothing, Just (82, 70), Just (103, 100), Nothing, Just (120, 120), Nothing]
+  , testCase "o" $ swapInRow (50, 49) [Just (28, 10), Just (43, 36), Nothing, Just (56, 56), Nothing] 2 @?= [Just (28, 6), Just (43, 34), Nothing, Just (56, 56), Nothing]
+  , testCase "p" $ swapInRow (51, 50) [Just (25, 12), Nothing, Just (51, 50), Just (56, 56), Nothing] 2 @?= [Just (25, 8), Nothing, Just (51, 50), Just (56, 56), Nothing]
+  , testCase "q" $ swapInRow (58, 57) [Just (30, 16), Nothing, Nothing, Nothing, Nothing] 3 @?= [Just (30, 8), Nothing, Nothing, Nothing, Nothing]
+  , testCase "r" $ swapInRow (10, 9) [Just (6, 4), Nothing, Just (12, 12)] 1 @?= [Just (6, 2), Nothing, Just (12, 12)]
+  ]
+
+-- TODO check parentMany i golang kald fra fejlende swapInRow tests (og tilføj tests)
+-- (det er underligt at den sidste parentMany branch bliver kaldt men ingen effekt har)
+-- dernæst swapCollapses
 -- dernæst remTrans2
 
 main :: IO ()
 main = do
-    defaultMain tests3
+    defaultMain $ testGroup "all tests" [tests, tests2, tests3, tests4]
 
     putStrLn "HASKELL MAIN STARTS"
     let Just forest = forestWithLeaves testLeaves

@@ -240,6 +240,10 @@ func parentMany(position uint64, rise, forestRows uint8) uint64 {
 	return (position>>rise | (mask << uint64(forestRows-(rise-1)))) & mask
 }
 
+func ParentMany(position uint64, rise, forestRows uint8) uint64 {
+	return parentMany(position, rise, forestRows)
+}
+
 // cousin returns a cousin: the child of the parent's sibling.
 // you just xor with 2.  Actually there's no point in calling this function but
 // it's here to document it.  If you're the left sibling it returns the left
