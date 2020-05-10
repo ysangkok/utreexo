@@ -413,6 +413,20 @@ func (f *Forest) addv2(adds []Leaf) {
 	}
 }
 
+// PrepareInsertion remaps the forest until large enough
+func (f *Forest) PrepareInsertion(delta uint64) error {
+	// remap to expand the forest if needed
+	for f.numLeaves+delta > uint64(1<<f.rows) {
+		// fmt.Printf("current cap %d need %d\n",
+		// 1<<f.Rows, f.NumLeaves+delta)
+		err := f.reMap(f.rows + 1)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Modify changes the forest, adding and deleting leaves and updating internal nodes.
 // Note that this does not modify in place!  All deletes occur simultaneous with
 // adds, which show up on the right.
