@@ -13,6 +13,7 @@ executable utreexo
                      , wide-word
                      , tasty
                      , tasty-hunit
+                     , mtl
   default-language:    Haskell2010
   includes: libutreexo.h
   include-dirs: .
