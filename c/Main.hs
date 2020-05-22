@@ -339,7 +339,7 @@ swapCollapses :: [[(Word64, Word64)]] -> [Maybe (Word64, Word64)] -> [Maybe (Wor
 swapCollapses swaps collapses = snd $ flip runState collapses $ do
     forM_ [length collapses - 1, length collapses - 2 .. 1] $ \r -> do
       forM_ (swaps !! r) $ \s ->
-        modify (\coll -> swapInRow s coll r)
+        modify (\coll -> swapInRow s coll r) -- this would take forestRows
       val <- get
       case val !! r of
         Just rowcol -> modify (\coll -> swapInRow rowcol coll r)
@@ -536,13 +536,37 @@ testsA = testGroup "remTransPre tests"
     , testCase "g" $ remTransPre [0, 3, 4] 8 3 @?= ([[(2, 0)], [(11, 9)], []], [Just (5, 4), Nothing, Just (12, 12)])
   ]
 
+remTrans2 :: [Word64] -> Word64 -> Int -> [[(Word64, Word64)]]
+remTrans2 dels numLeaves forestRows =
+  let
+    (swaps, collapses) = remTransPre dels numLeaves forestRows
+    newCollapses = swapCollapses swaps collapses
+    f (swap, (Just (from, to))) | from /= to = swap ++ [(from, to)]
+    f (swap, _) = swap
+    newSwaps = map f (zip swaps newCollapses)
+  in
+    newSwaps
+
+testsB :: TestTree
+testsB = testGroup "remTrans2 tests"
+  [
+      testCase "0" $ remTrans2 [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 17, 19, 20, 21, 22, 23, 26] 29 5 @?= [[(16, 3), (27, 19), (28, 10)], [(41, 38), (44, 36)], [(51, 49)], [], []]
+    , testCase "1" $ remTrans2 [0, 2, 3, 4, 5, 11] 12 4 @?= [[(10, 0)], [(19, 17), (20, 18)], [], []]
+    , testCase "2" $ remTrans2 [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 13, 16, 19, 20, 22, 23, 24, 27] 28 5 @?= [[(6, 1), (17, 13), (21, 19), (26, 24)], [(41, 33), (44, 36)], [(51, 49)], [], []]
+    , testCase "3" $ remTrans2 [1, 2, 5, 8, 11, 12, 15] 18 5 @?= [[(3, 1), (9, 5), (13, 11), (14, 2)], [(37, 33), (40, 36)], [], [], []]
+    , testCase "4" $ remTrans2 [0, 2, 3] 5 3 @?= [[(4, 0)], [], []]
+    , testCase "5" $ remTrans2 [0, 1, 5, 7, 8, 9, 10, 12, 14, 16, 17, 20, 21, 25, 26, 27] 29 5 @?= [[(6, 5), (13, 10), (24, 14), (28, 12)], [(34, 32), (39, 36), (43, 40)], [(50, 49), (52, 50)], [], []]
+    , testCase "6" $ remTrans2 [2, 3, 4, 5, 9, 11, 13, 18, 19, 20, 21, 22, 23, 25] 31 5 @?= [[(10, 9), (24, 13), (30, 10)], [(35, 33), (40, 37), (46, 44)], [(54, 49)], [], []]
+    , testCase "7" $ remTrans2 [3, 6, 7] 8 3 @?= [[], [(10, 9)], []]
+  ]
+
 -- TODO remTrans2
 
 main :: IO ()
 main = do
     defaultMain $ testGroup "all tests" $
         [
-          tests, tests2, tests3, tests4, tests5, tests6, tests7, tests8, tests9, testsA
+          tests, tests2, tests3, tests4, tests5, tests6, tests7, tests8, tests9, testsA, testsB
         ]
 
     putStrLn "HASKELL MAIN STARTS"
