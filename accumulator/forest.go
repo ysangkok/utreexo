@@ -2,6 +2,7 @@ package accumulator
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -177,7 +178,11 @@ func (f *Forest) removev4(dels []uint64) error {
 	// satisfy the same interface..?  maybe?  that could work...
 	// TODO try that ^^^^^^
 	for r := uint8(0); r < f.rows; r++ {
+		bef, _ := json.Marshal(hashDirt)
+		rows, _ := json.Marshal(swapRows[r])
 		hashDirt = updateDirt(hashDirt, swapRows[r], f.numLeaves, f.rows)
+		aft, _ := json.Marshal(hashDirt)
+		fmt.Printf("updateDirt [%v,%v,%v,%v,%v]\n", string(bef), string(rows), f.numLeaves, f.rows, string(aft))
 		for _, swap := range swapRows[r] {
 			f.swapNodes(swap, r)
 		}

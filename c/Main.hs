@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface, TypeApplications #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
 
 import System.IO.Unsafe (unsafePerformIO)
 import Forest
@@ -15,7 +15,7 @@ import Data.Functor.Identity (Identity)
 import Data.Word (Word64)
 import Data.List (inits)
 import Data.List.Split (chunksOf)
-import Data.Maybe (fromMaybe, catMaybes)
+import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
 import Data.Either (lefts, rights)
 import Data.Bits
 
@@ -23,6 +23,7 @@ import Control.Monad.State.Lazy (runState, modify, get, put, lift, State)
 import Pipes.Prelude (toListM)
 import Pipes (yield, Producer)
 import Control.Monad (forM_, unless, mzero)
+import Control.Monad.Loops (whileM_)
 
 import Debug.Trace
 
@@ -491,7 +492,7 @@ remTransPre :: [Word64] -> Word64 -> Int -> ([[(Word64, Word64)]], [Maybe (Word6
 remTransPre dels numLeaves forestRows =
   let
     nextNumLeaves = numLeaves - (fromInteger $ toInteger $ length dels)
-    producer :: Producer (Either [(Word64, Word64)] (Maybe (Word64, Word64))) (State [Word64]) ()
+    producer :: Producer (([(Word64, Word64)], (Maybe (Word64, Word64)))) (State [Word64]) ()
     producer =
       forM_ [0 .. forestRows - 1] $ \row -> do
         readDels <- lift $ get
@@ -506,13 +507,12 @@ remTransPre dels numLeaves forestRows =
           lift $ put $ merge twinNextDels swapNextDels
           let collapsed = makeCollapse newDels rootPresent row numLeaves nextNumLeaves forestRows
           let swaps = makeSwaps newDels rootPresent rootPos
-          yield $ Left swaps
-          yield $ Right collapsed
+          yield $ (swaps, collapsed)
     both = fst $ runState (toListM producer) dels
-    padding1 = replicate (forestRows - length (lefts both)) mzero
-    padding2 = replicate (forestRows - length (lefts both)) mzero
+    padding1 = replicate (forestRows - length both) mzero
+    padding2 = replicate (forestRows - length both) mzero
   in
-    (lefts both ++ padding1, rights both ++ padding2)
+    (map fst both ++ padding1, map snd both ++ padding2)
 
 testsA :: TestTree
 testsA = testGroup "remTransPre tests"
@@ -560,13 +560,285 @@ testsB = testGroup "remTrans2 tests"
     , testCase "7" $ remTrans2 [3, 6, 7] 8 3 @?= [[], [(10, 9)], []]
   ]
 
--- TODO remTrans2
+updateDirt :: [Word64] -> [(Word64, Word64)] -> Int -> Int -> [Word64]
+updateDirt hashDirt swapRow numLeaves rows =
+  let
+    loop :: [Word64] -> [(Word64, Word64)] -> Word64 -> [Word64]
+    loop [] [] prevHash = []
+    loop readDirt readSwap prevHash =
+      let (popSwap, hashDest) = makeDestInRow (listToMaybe readSwap) (listToMaybe readDirt) rows
+          leavesInt = fromInteger $ toInteger numLeaves
+          newDest = if (not $ inForest hashDest leavesInt rows)
+                    || hashDest == 0
+                    || hashDest == prevHash
+                    then prevHash
+                    else hashDest
+          rest = if popSwap
+                 then loop readDirt (tail readSwap) newDest
+                 else loop (tail readDirt) readSwap newDest
+      in case rest of
+           x : _ | x == hashDest -> rest
+           []                    -> [hashDest]
+           _                     -> hashDest : rest --(if not $ hashDest `elem` rest then [hashDest] else []) ++ rest
+    deduped = dedupeSwapDirt hashDirt swapRow
+  in
+    loop deduped swapRow 0
+
+makeDestInRow :: Maybe (Word64, Word64) -> Maybe Word64 -> Int -> (Bool, Word64)
+-- IS THIS A NO-OP? remove from upstream
+makeDestInRow (Just (_, to)) (Just firstDirt) rows | firstDirt > to =
+  (False, parent firstDirt rows)
+
+-- swapping these makes a difference, why?
+
+makeDestInRow (Just (_, to)) _          rows =
+  (True, parent to rows)
+makeDestInRow _              (Just firstDirt) rows =
+  (False, parent firstDirt rows)
+makeDestInRow _ _ _ = error "both parameters empty"
+
+--inForest2 :: Word64 -> Word64 -> Int -> Bool
+--inForest2 pos numLeaves rows | pos < numLeaves = True
+--inForest2 pos numLeaves rows =
+--  let marker = 1 `shiftL` rows
+--      mask = (marker `shiftL` 1) - 1
+--      loop :: Word64 -> Word64
+--      loop pos =
+--        if pos .&. marker /= 0
+--          then loop ((pos `shiftL` 1) .&. mask) .|. 1
+--          else pos
+--  in
+--    if pos >= mask
+--      then False
+--      else loop pos < numLeaves
+
+inForest pos numLeaves rows | pos < numLeaves = True
+inForest pos numLeaves rows =
+  let marker = 1 `shiftL` rows
+      mask = (marker `shiftL` 1) - 1
+      newPos :: Word64
+      newPos = snd $ flip runState pos $ do
+                 put $ pos
+                 whileM_ (do gotten<-get; return $ gotten .&. marker /= 0) $ do
+                   gotten <- get
+                   put $ ((gotten `shiftL` 1) .&. mask) .|. 1
+  in
+      newPos < numLeaves
+        
+      
+
+testsC = testGroup "updateDirt tests"
+  [
+      testCase "0" $ updateDirt [49, 52, 48, 50] [] 21 5 @?= [56, 57]
+    , testCase "1" $ updateDirt [56, 57] [] 21 5 @?= [60]
+    , testCase "2" $ updateDirt [] [(6, 4)] 11 4 @?= [18]
+    , testCase "3" $ updateDirt [18] [(18, 17), (20, 18)] 11 4 @?= [24, 25]
+    , testCase "4" $ updateDirt [24, 25] [] 11 4 @?= [28]
+    , testCase "2" $ updateDirt [] [(11, 4), (15, 2)] 16 4 @?= [18, 17]
+    , testCase "3" $ updateDirt [18, 17] [(20, 17)] 16 4 @?= [25, 24]
+    , testCase "4" $ updateDirt [25, 24] [] 16 4 @?= [28]
+    , testCase "5" $ updateDirt [28] [] 16 4 @?= [30]
+    , testCase "6" $ updateDirt [] [(3, 1), (9, 7), (14, 12), (19, 2)] 24 5 @?= [32, 35, 38, 33]
+    , testCase "7" $ updateDirt [32, 35, 38, 33] [(37, 33), (40, 39), (42, 36)] 24 5 @?= [48, 51, 50, 48, 49, 51]
+    , testCase "8" $ updateDirt [48, 51, 50, 48, 49, 51] [(51, 50)] 24 5 @?= [57, 56, 57, 56, 57]
+    , testCase "9" $ updateDirt [57, 56, 57, 56, 57] [] 24 5 @?= [60]
+    , testCase "10" $ updateDirt [] [(7, 0), (17, 12), (35, 31), (38, 36)] 43 6 @?= [64, 70, 79, 82]
+    , testCase "11" $ updateDirt [64, 70, 79, 82] [(68, 67), (74, 72), (79, 76), (82, 74)] 43 6 @?= [97, 100, 102, 101, 96, 99, 103, 105]
+    , testCase "12" $ updateDirt [97, 100, 102, 101, 96, 99, 103, 105] [(100, 98), (102, 100)] 43 6 @?= [113, 114, 112, 115, 114, 112, 113, 115, 116]
+    , testCase "13" $ updateDirt [113, 114, 112, 115, 114, 112, 113, 115, 116] [] 43 6 @?= [120, 121, 120, 121, 120, 121]
+    , testCase "14" $ updateDirt [120, 121, 120, 121, 120, 121] [] 43 6 @?= [124]
+    , testCase "15" $ updateDirt [] [(2, 0), (18, 16), (24, 2)] 29 5 @?= [32, 40, 33]
+    , testCase "16" $ updateDirt [32, 40, 33] [(35, 33), (40, 36), (45, 34)] 29 5 @?= [48, 50, 49, 48, 52]
+    , testCase "17" $ updateDirt [48, 50, 49, 48, 52] [(50, 49)] 29 5 @?= [56, 57, 56, 58]
+    , testCase "18" $ updateDirt [56, 57, 56, 58] [] 29 5 @?= [60]
+    , testCase "19" $ updateDirt [] [(26, 24)] 12 4 @?= [28]
+    , testCase "20" $ updateDirt [] [(11, 8), (18, 17), (23, 21)] 28 5 @?= [36, 40, 42]
+    , testCase "21" $ updateDirt [36, 40, 42] [(36, 32), (40, 38), (42, 36)] 28 5 @?= [52, 53, 48, 51, 50]
+    , testCase "22" $ updateDirt [52, 53, 48, 51, 50] [(51, 49)] 28 5 @?= [58, 56, 57]
+    , testCase "23" $ updateDirt [58, 56, 57] [] 28 5 @?= [60]
+    , testCase "24" $ updateDirt [] [(4, 2), (9, 6), (14, 0)] 18 5 @?= [33, 35, 32]
+    , testCase "25" $ updateDirt [33, 35, 32] [(35, 32), (38, 36), (40, 34)] 18 5 @?= [48, 49, 48, 50, 49]
+    , testCase "26" $ updateDirt [48, 49, 48, 50, 49] [(50, 49)] 18 5 @?= [56, 57]
+    , testCase "27" $ updateDirt [56, 57] [] 18 5 @?= [60]
+    , testCase "28" $ updateDirt [] [(2, 1)] 5 3 @?= [8]
+    , testCase "29" $ updateDirt [8] [] 5 3 @?= [12]
+    , testCase "30" $ updateDirt [] [(13, 4), (17, 15), (20, 19), (24, 23), (27, 12)] 29 5 @?= [34, 39, 41, 43, 38]
+    , testCase "31" $ updateDirt [34, 39, 41, 43, 38] [(34, 32), (39, 37), (43, 40)] 29 5 @?= [49, 51, 52, 53, 51, 48, 50, 52]
+    , testCase "32" $ updateDirt [49, 51, 52, 53, 51, 48, 50, 52] [(50, 49), (52, 50)] 29 5 @?= [57, 58, 57, 56, 57, 56, 58]
+    , testCase "33" $ updateDirt [57, 58, 57, 56, 57, 56, 58] [] 29 5 @?= [60]
+    , testCase "34" $ updateDirt [] [(12, 8), (17, 14), (22, 19), (26, 16)] 31 5 @?= [36, 39, 41, 40]
+    , testCase "35" $ updateDirt [36, 39, 41, 40] [(41, 38), (46, 45)] 31 5 @?= [51, 54, 50, 51, 52]
+    , testCase "36" $ updateDirt [51, 54, 50, 51, 52] [(54, 48)] 31 5 @?= [57, 58, 56]
+    , testCase "37" $ updateDirt [57, 58, 56] [] 31 5 @?= [60]
+    , testCase "38" $ updateDirt [] [(6, 2)] 8 3 @?= [9]
+    , testCase "39" $ updateDirt [9] [(10, 9)] 8 3 @?= [12]
+    , testCase "40" $ updateDirt [12] [] 8 3 @?= [14]
+  ]
+
+dedupeSwapDirt hashDirt swapRow = [x | x <- hashDirt, not $ x `elem` map snd swapRow]
+
+testsD = testGroup "inForest tests"
+  [
+      testCase "1" $ inForest 102 33 6 @?= True
+    , testCase "2" $ inForest 103 33 6 @?= True
+    , testCase "3" $ inForest 96 33 6 @?= True
+    , testCase "4" $ inForest 98 33 6 @?= True
+    , testCase "19" $ inForest 124 33 6 @?= True
+    , testCase "20" $ inForest 126 33 6 @?= False
+    , testCase "21" $ inForest 35 29 5 @?= True
+    , testCase "31" $ inForest 57 29 5 @?= True
+    , testCase "32" $ inForest 59 29 5 @?= False
+    , testCase "33" $ inForest 56 29 5 @?= True
+    , testCase "37" $ inForest 60 29 5 @?= True
+    , testCase "38" $ inForest 62 29 5 @?= False
+    , testCase "39" $ inForest 4 4 2 @?= True
+    , testCase "40" $ inForest 6 4 2 @?= True
+    , testCase "41" $ inForest 32 25 5 @?= True
+    , testCase "57" $ inForest 60 25 5 @?= True
+    , testCase "58" $ inForest 61 25 5 @?= False
+    , testCase "59" $ inForest 62 25 5 @?= False
+    , testCase "60" $ inForest 32 25 5 @?= True
+    , testCase "75" $ inForest 60 25 5 @?= True
+    , testCase "76" $ inForest 62 25 5 @?= False
+    , testCase "77" $ inForest 14 8 3 @?= True
+    , testCase "78" $ inForest 33 24 5 @?= True
+    , testCase "79" $ inForest 37 24 5 @?= True
+    , testCase "95" $ inForest 61 24 5 @?= False
+    , testCase "96" $ inForest 60 24 5 @?= True
+    , testCase "97" $ inForest 62 24 5 @?= False
+    , testCase "98" $ inForest 18 11 4 @?= True
+    , testCase "99" $ inForest 20 11 4 @?= True
+    , testCase "100" $ inForest 25 11 4 @?= True
+    , testCase "101" $ inForest 25 11 4 @?= True
+    , testCase "102" $ inForest 26 11 4 @?= False
+    , testCase "103" $ inForest 28 11 4 @?= True
+    , testCase "104" $ inForest 30 11 4 @?= False
+    , testCase "105" $ inForest 33 23 5 @?= True
+    , testCase "118" $ inForest 57 23 5 @?= True
+    , testCase "119" $ inForest 58 23 5 @?= False
+    , testCase "120" $ inForest 60 23 5 @?= True
+    , testCase "121" $ inForest 60 23 5 @?= True
+    , testCase "122" $ inForest 60 23 5 @?= True
+    , testCase "123" $ inForest 62 23 5 @?= False
+    , testCase "124" $ inForest 17 14 4 @?= True
+    , testCase "129" $ inForest 28 14 4 @?= True
+    , testCase "130" $ inForest 30 14 4 @?= False
+    , testCase "131" $ inForest 65 42 6 @?= True
+    , testCase "138" $ inForest 100 42 6 @?= True
+    , testCase "139" $ inForest 103 42 6 @?= True
+    , testCase "140" $ inForest 101 42 6 @?= True
+    , testCase "141" $ inForest 96 42 6 @?= True
+    , testCase "142" $ inForest 98 42 6 @?= True
+    , testCase "143" $ inForest 100 42 6 @?= True
+    , testCase "163" $ inForest 120 42 6 @?= True
+    , testCase "164" $ inForest 121 42 6 @?= True
+    , testCase "165" $ inForest 122 42 6 @?= False
+    , testCase "166" $ inForest 124 42 6 @?= True
+    , testCase "171" $ inForest 124 42 6 @?= True
+    , testCase "172" $ inForest 126 42 6 @?= False
+    , testCase "173" $ inForest 66 35 6 @?= True
+    , testCase "194" $ inForest 126 35 6 @?= False
+    , testCase "195" $ inForest 33 29 5 @?= True
+    , testCase "216" $ inForest 61 29 5 @?= False
+    , testCase "217" $ inForest 60 29 5 @?= True
+    , testCase "218" $ inForest 60 29 5 @?= True
+    , testCase "219" $ inForest 62 29 5 @?= False
+    , testCase "223" $ inForest 28 13 4 @?= True
+    , testCase "224" $ inForest 30 13 4 @?= False
+    , testCase "230" $ inForest 96 38 6 @?= True
+    , testCase "231" $ inForest 100 38 6 @?= True
+    , testCase "232" $ inForest 103 38 6 @?= True
+    , testCase "233" $ inForest 96 38 6 @?= True
+    , testCase "234" $ inForest 97 38 6 @?= True
+    , testCase "235" $ inForest 98 38 6 @?= True
+    , testCase "236" $ inForest 101 38 6 @?= True
+    , testCase "237" $ inForest 103 38 6 @?= True
+    , testCase "238" $ inForest 112 38 6 @?= True
+    , testCase "257" $ inForest 126 38 6 @?= False
+    , testCase "265" $ inForest 28 13 4 @?= True
+    , testCase "266" $ inForest 30 13 4 @?= False
+    , testCase "267" $ inForest 32 29 5 @?= True
+    , testCase "283" $ inForest 60 29 5 @?= True
+    , testCase "284" $ inForest 61 29 5 @?= False
+    , testCase "285" $ inForest 60 29 5 @?= True
+    , testCase "286" $ inForest 62 29 5 @?= False
+    , testCase "287" $ inForest 32 25 5 @?= True
+    , testCase "288" $ inForest 34 25 5 @?= True
+    , testCase "289" $ inForest 37 25 5 @?= True
+    , testCase "290" $ inForest 40 25 5 @?= True
+    , testCase "307" $ inForest 60 25 5 @?= True
+    , testCase "308" $ inForest 61 25 5 @?= False
+    , testCase "309" $ inForest 62 25 5 @?= False
+    , testCase "310" $ inForest 34 29 5 @?= True
+    , testCase "311" $ inForest 40 29 5 @?= True
+    , testCase "326" $ inForest 60 29 5 @?= True
+    , testCase "327" $ inForest 61 29 5 @?= False
+    , testCase "328" $ inForest 60 29 5 @?= True
+    , testCase "329" $ inForest 61 29 5 @?= False
+    , testCase "330" $ inForest 62 29 5 @?= False
+    , testCase "331" $ inForest 32 21 5 @?= True
+    , testCase "339" $ inForest 60 21 5 @?= True
+    , testCase "340" $ inForest 62 21 5 @?= False
+    , testCase "341" $ inForest 16 11 4 @?= True
+    , testCase "346" $ inForest 24 11 4 @?= True
+    , testCase "347" $ inForest 26 11 4 @?= False
+    , testCase "348" $ inForest 28 11 4 @?= True
+    , testCase "349" $ inForest 28 11 4 @?= True
+    , testCase "350" $ inForest 28 11 4 @?= True
+    , testCase "351" $ inForest 30 11 4 @?= False
+    , testCase "352" $ inForest 16 16 4 @?= True
+    , testCase "353" $ inForest 18 16 4 @?= True
+    , testCase "378" $ inForest 60 24 5 @?= True
+    , testCase "379" $ inForest 60 24 5 @?= True
+    , testCase "380" $ inForest 61 24 5 @?= False
+    , testCase "381" $ inForest 62 24 5 @?= False
+    , testCase "382" $ inForest 69 43 6 @?= True
+    , testCase "383" $ inForest 75 43 6 @?= True
+    , testCase "410" $ inForest 124 43 6 @?= True
+    , testCase "411" $ inForest 126 43 6 @?= False
+    , testCase "412" $ inForest 34 29 5 @?= True
+    , testCase "432" $ inForest 57 29 5 @?= True
+    , testCase "433" $ inForest 60 29 5 @?= True
+    , testCase "434" $ inForest 61 29 5 @?= False
+    , testCase "435" $ inForest 60 29 5 @?= True
+    , testCase "438" $ inForest 62 29 5 @?= False
+    , testCase "443" $ inForest 28 12 4 @?= True
+    , testCase "444" $ inForest 30 12 4 @?= False
+    , testCase "445" $ inForest 32 28 5 @?= True
+    , testCase "446" $ inForest 38 28 5 @?= True
+    , testCase "464" $ inForest 60 28 5 @?= True
+    , testCase "465" $ inForest 61 28 5 @?= False
+    , testCase "466" $ inForest 62 28 5 @?= False
+    , testCase "467" $ inForest 32 18 5 @?= True
+    , testCase "483" $ inForest 60 18 5 @?= True
+    , testCase "484" $ inForest 62 18 5 @?= False
+    , testCase "485" $ inForest 8 5 3 @?= True
+    , testCase "486" $ inForest 12 5 3 @?= True
+    , testCase "487" $ inForest 14 5 3 @?= False
+    , testCase "488" $ inForest 32 29 5 @?= True
+    , testCase "489" $ inForest 37 29 5 @?= True
+    , testCase "502" $ inForest 61 29 5 @?= False
+    , testCase "503" $ inForest 60 29 5 @?= True
+    , testCase "504" $ inForest 60 29 5 @?= True
+    , testCase "505" $ inForest 60 29 5 @?= True
+    , testCase "506" $ inForest 61 29 5 @?= False
+    , testCase "507" $ inForest 62 29 5 @?= False
+    , testCase "508" $ inForest 32 31 5 @?= True
+    , testCase "524" $ inForest 59 31 5 @?= False
+    , testCase "525" $ inForest 56 31 5 @?= True
+    , testCase "528" $ inForest 59 31 5 @?= False
+    , testCase "529" $ inForest 58 31 5 @?= True
+    , testCase "534" $ inForest 61 31 5 @?= False
+    , testCase "535" $ inForest 62 31 5 @?= False
+  ]
+
 
 main :: IO ()
 main = do
     defaultMain $ testGroup "all tests" $
         [
-          tests, tests2, tests3, tests4, tests5, tests6, tests7, tests8, tests9, testsA, testsB
+          tests,  tests2, tests3, tests4, tests5, tests6, tests7, tests8,
+          tests9, testsA, testsB, testsD, testsC
         ]
 
     putStrLn "HASKELL MAIN STARTS"
