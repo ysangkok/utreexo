@@ -9,7 +9,7 @@ libutreexo.h: forest_c_.go libforest.a
 main: main.c libutreexo.h
 	gcc -Wall -o main main.c -lutreexo -L./ -Wl,-rpath=.
 
-.PHONY: run clean haskell
+.PHONY: run clean haskell updateDirt.txt updateDirt.json
 
 run: main
 	./main
@@ -19,3 +19,9 @@ clean:
 
 haskell: libutreexo.h
 	LD_LIBRARY_PATH=. cabal run utreexo -- --color always
+
+updateDirt.txt: 
+	cd ..; go test ./accumulator -test.v | grep updateDirt > c/updateDirt.txt
+
+updateDirt.json: updateDirt.txt
+	bash -c '(echo "["; cut -d" " -f2 < updateDirt.txt | sed -re "s/$$/,/" | sed -re "s/null/[]/g" | head -c-2; echo "]")  | jq > updateDirt.json'

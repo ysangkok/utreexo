@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE ForeignFunctionInterface, DeriveGeneric, ScopedTypeVariables #-}
 
 import System.IO.Unsafe (unsafePerformIO)
 import Forest
@@ -10,7 +10,9 @@ import Foreign.C.String (peekCString)
 
 import Test.Tasty
 import Test.Tasty.HUnit
+import Test.Tasty.Hspec
 
+import Data.Either (fromRight)
 import Data.Functor.Identity (Identity)
 import Data.Word (Word64)
 import Data.List (inits)
@@ -26,6 +28,9 @@ import Control.Monad (forM_, unless, mzero)
 import Control.Monad.Loops (whileM_)
 
 import Debug.Trace
+import Data.Aeson (eitherDecodeFileStrict', Array, FromJSON(..), ToJSON(..), genericToJSON, genericParseJSON)
+import Data.Aeson.Casing
+import GHC.Generics
 
 foreign import ccall "libutreexo.h"
     cForestPrint
@@ -500,7 +505,7 @@ remTransPre dels numLeaves forestRows =
           let preRootPresent = numLeaves .&. (1 `shiftL` row) /= 0
           let rootPos = rootPosition numLeaves row forestRows
           let (gottenDels, rootPresent) = if preRootPresent && last readDels == rootPos
-                                              then (reverse $ tail $ reverse readDels, False)
+                                              then (init readDels, False)
                                               else (readDels, preRootPresent)
           let (twinNextDels, newDels) = extractTwins gottenDels forestRows
           let swapNextDels = makeSwapNextDels newDels rootPresent forestRows
@@ -832,13 +837,34 @@ testsD = testGroup "inForest tests"
     , testCase "535" $ inForest 62 31 5 @?= False
   ]
 
+data Obj = Obj {
+      objFrom :: Word64
+    , objTo :: Word64
+} deriving (Show, Generic)
+
+instance ToJSON Obj where
+   toJSON = genericToJSON $ aesonPrefix pascalCase
+instance FromJSON Obj where
+   parseJSON = genericParseJSON $ aesonPrefix pascalCase
+
+
+testsHspec :: Spec
+testsHspec = do
+    a <- runIO $ eitherDecodeFileStrict' "updateDirt.json"
+    let Right (jsonRaw :: [([Word64], [Obj], Int, Int, [Word64])]) = a
+    forM_ (take 200 jsonRaw) $ \tupl@(a, b, c, d, e) ->
+      let
+        tupls = [(objFrom o, objTo o) | o <- b]
+      in
+        it (show (a, tupls, c, d) ++ " matches reference " ++ show e) $ updateDirt a tupls c d `shouldBe` e
 
 main :: IO ()
 main = do
+    tree <- testSpec "hspec tests" testsHspec
     defaultMain $ testGroup "all tests" $
         [
           tests,  tests2, tests3, tests4, tests5, tests6, tests7, tests8,
-          tests9, testsA, testsB, testsD, testsC
+          tests9, testsA, testsB, testsD, testsC, tree
         ]
 
     putStrLn "HASKELL MAIN STARTS"
