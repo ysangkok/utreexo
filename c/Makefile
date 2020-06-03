@@ -17,10 +17,10 @@ run: main
 clean:
 	rm -rf *.a *.o *.so main libutreexo.h Forest_hsc_make.c dist-newstyle
 
-haskell: libutreexo.h
+haskell: libutreexo.h updateDirt.json
 	LD_LIBRARY_PATH=. cabal run utreexo -- --color always
 
-updateDirt.txt: 
+updateDirt.txt:  ../accumulator/*.go
 	cd ..; go test ./accumulator -test.v | grep updateDirt > c/updateDirt.txt
 
 updateDirt.json: updateDirt.txt

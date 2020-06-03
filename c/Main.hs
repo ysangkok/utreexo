@@ -15,7 +15,7 @@ import Test.Tasty.Hspec
 import Data.Either (fromRight)
 import Data.Functor.Identity (Identity)
 import Data.Word (Word64)
-import Data.List (inits)
+import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
 import Data.Either (lefts, rights)
@@ -573,19 +573,18 @@ updateDirt hashDirt swapRow numLeaves rows =
     loop readDirt readSwap prevHash =
       let (popSwap, hashDest) = makeDestInRow (listToMaybe readSwap) (listToMaybe readDirt) rows
           leavesInt = fromInteger $ toInteger numLeaves
-          newDest = if (not $ inForest hashDest leavesInt rows)
-                    || hashDest == 0
-                    || hashDest == prevHash
-                    then prevHash
-                    else hashDest
+          skip = (not $ inForest hashDest leavesInt rows)
+                  || hashDest == 0
+                  || hashDest == prevHash
+          newDest = if skip then prevHash else hashDest
           rest = if popSwap
                  then loop readDirt (tail readSwap) newDest
                  else loop (tail readDirt) readSwap newDest
-      in case rest of
-           x : _ | x == hashDest -> rest
-           []                    -> [hashDest]
-           _                     -> hashDest : rest --(if not $ hashDest `elem` rest then [hashDest] else []) ++ rest
-    deduped = dedupeSwapDirt hashDirt swapRow
+      in
+        if skip || hashDest `elem` rest
+          then rest
+          else sort $ hashDest : rest
+    deduped = dedupeSwapDirt (sort hashDirt) (sortOn snd swapRow)
   in
     loop deduped swapRow 0
 
@@ -632,53 +631,6 @@ inForest pos numLeaves rows =
         
       
 
-testsC = testGroup "updateDirt tests"
-  [
-      testCase "0" $ updateDirt [49, 52, 48, 50] [] 21 5 @?= [56, 57]
-    , testCase "1" $ updateDirt [56, 57] [] 21 5 @?= [60]
-    , testCase "2" $ updateDirt [] [(6, 4)] 11 4 @?= [18]
-    , testCase "3" $ updateDirt [18] [(18, 17), (20, 18)] 11 4 @?= [24, 25]
-    , testCase "4" $ updateDirt [24, 25] [] 11 4 @?= [28]
-    , testCase "2" $ updateDirt [] [(11, 4), (15, 2)] 16 4 @?= [18, 17]
-    , testCase "3" $ updateDirt [18, 17] [(20, 17)] 16 4 @?= [25, 24]
-    , testCase "4" $ updateDirt [25, 24] [] 16 4 @?= [28]
-    , testCase "5" $ updateDirt [28] [] 16 4 @?= [30]
-    , testCase "6" $ updateDirt [] [(3, 1), (9, 7), (14, 12), (19, 2)] 24 5 @?= [32, 35, 38, 33]
-    , testCase "7" $ updateDirt [32, 35, 38, 33] [(37, 33), (40, 39), (42, 36)] 24 5 @?= [48, 51, 50, 48, 49, 51]
-    , testCase "8" $ updateDirt [48, 51, 50, 48, 49, 51] [(51, 50)] 24 5 @?= [57, 56, 57, 56, 57]
-    , testCase "9" $ updateDirt [57, 56, 57, 56, 57] [] 24 5 @?= [60]
-    , testCase "10" $ updateDirt [] [(7, 0), (17, 12), (35, 31), (38, 36)] 43 6 @?= [64, 70, 79, 82]
-    , testCase "11" $ updateDirt [64, 70, 79, 82] [(68, 67), (74, 72), (79, 76), (82, 74)] 43 6 @?= [97, 100, 102, 101, 96, 99, 103, 105]
-    , testCase "12" $ updateDirt [97, 100, 102, 101, 96, 99, 103, 105] [(100, 98), (102, 100)] 43 6 @?= [113, 114, 112, 115, 114, 112, 113, 115, 116]
-    , testCase "13" $ updateDirt [113, 114, 112, 115, 114, 112, 113, 115, 116] [] 43 6 @?= [120, 121, 120, 121, 120, 121]
-    , testCase "14" $ updateDirt [120, 121, 120, 121, 120, 121] [] 43 6 @?= [124]
-    , testCase "15" $ updateDirt [] [(2, 0), (18, 16), (24, 2)] 29 5 @?= [32, 40, 33]
-    , testCase "16" $ updateDirt [32, 40, 33] [(35, 33), (40, 36), (45, 34)] 29 5 @?= [48, 50, 49, 48, 52]
-    , testCase "17" $ updateDirt [48, 50, 49, 48, 52] [(50, 49)] 29 5 @?= [56, 57, 56, 58]
-    , testCase "18" $ updateDirt [56, 57, 56, 58] [] 29 5 @?= [60]
-    , testCase "19" $ updateDirt [] [(26, 24)] 12 4 @?= [28]
-    , testCase "20" $ updateDirt [] [(11, 8), (18, 17), (23, 21)] 28 5 @?= [36, 40, 42]
-    , testCase "21" $ updateDirt [36, 40, 42] [(36, 32), (40, 38), (42, 36)] 28 5 @?= [52, 53, 48, 51, 50]
-    , testCase "22" $ updateDirt [52, 53, 48, 51, 50] [(51, 49)] 28 5 @?= [58, 56, 57]
-    , testCase "23" $ updateDirt [58, 56, 57] [] 28 5 @?= [60]
-    , testCase "24" $ updateDirt [] [(4, 2), (9, 6), (14, 0)] 18 5 @?= [33, 35, 32]
-    , testCase "25" $ updateDirt [33, 35, 32] [(35, 32), (38, 36), (40, 34)] 18 5 @?= [48, 49, 48, 50, 49]
-    , testCase "26" $ updateDirt [48, 49, 48, 50, 49] [(50, 49)] 18 5 @?= [56, 57]
-    , testCase "27" $ updateDirt [56, 57] [] 18 5 @?= [60]
-    , testCase "28" $ updateDirt [] [(2, 1)] 5 3 @?= [8]
-    , testCase "29" $ updateDirt [8] [] 5 3 @?= [12]
-    , testCase "30" $ updateDirt [] [(13, 4), (17, 15), (20, 19), (24, 23), (27, 12)] 29 5 @?= [34, 39, 41, 43, 38]
-    , testCase "31" $ updateDirt [34, 39, 41, 43, 38] [(34, 32), (39, 37), (43, 40)] 29 5 @?= [49, 51, 52, 53, 51, 48, 50, 52]
-    , testCase "32" $ updateDirt [49, 51, 52, 53, 51, 48, 50, 52] [(50, 49), (52, 50)] 29 5 @?= [57, 58, 57, 56, 57, 56, 58]
-    , testCase "33" $ updateDirt [57, 58, 57, 56, 57, 56, 58] [] 29 5 @?= [60]
-    , testCase "34" $ updateDirt [] [(12, 8), (17, 14), (22, 19), (26, 16)] 31 5 @?= [36, 39, 41, 40]
-    , testCase "35" $ updateDirt [36, 39, 41, 40] [(41, 38), (46, 45)] 31 5 @?= [51, 54, 50, 51, 52]
-    , testCase "36" $ updateDirt [51, 54, 50, 51, 52] [(54, 48)] 31 5 @?= [57, 58, 56]
-    , testCase "37" $ updateDirt [57, 58, 56] [] 31 5 @?= [60]
-    , testCase "38" $ updateDirt [] [(6, 2)] 8 3 @?= [9]
-    , testCase "39" $ updateDirt [9] [(10, 9)] 8 3 @?= [12]
-    , testCase "40" $ updateDirt [12] [] 8 3 @?= [14]
-  ]
 
 dedupeSwapDirt hashDirt swapRow = [x | x <- hashDirt, not $ x `elem` map snd swapRow]
 
@@ -864,7 +816,7 @@ main = do
     defaultMain $ testGroup "all tests" $
         [
           tests,  tests2, tests3, tests4, tests5, tests6, tests7, tests8,
-          tests9, testsA, testsB, testsD, testsC, tree
+          tests9, testsA, testsB, testsD, tree
         ]
 
     putStrLn "HASKELL MAIN STARTS"
