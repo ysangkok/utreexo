@@ -14,12 +14,12 @@ import Control.Monad (ap)
 data CLeaf = CLeaf {
     first :: Word128
   , second :: Word128
-} deriving Show
+} deriving (Eq)
 
 data CMiniPos = CMiniPos {
     mini :: Word128
   , pos :: Word64
-} deriving Show
+} deriving (Eq, Show)
 
 data CForest = CForest {
     num_leaves :: Word64

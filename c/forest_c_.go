@@ -46,6 +46,9 @@ func MiniPosFor(ptr *C.minipos) (accumulator.MiniHash, uint64) {
 func ToC(f *accumulator.Forest) *C.forest {
 	//fmt.Printf("toC: %v, size: %v\n", f.NumLeaves, f.Data.Size())
 	//fmt.Println(f.ToString())
+	if f.Data.Size() == 0 || f.NumLeaves == 0 {
+		return nil
+	}
 	forest := (*C.forest)(C.malloc(C.sizeof_forest))
 	leaf := (*C.leaf)(C.malloc(C.sizeof_leaf * C.size_t(f.Data.Size())))
 	forest.leaves = leaf
@@ -60,14 +63,15 @@ func ToC(f *accumulator.Forest) *C.forest {
 	posMap := (*C.minipos)(C.malloc(C.sizeof_minipos * C.size_t(f.NumLeaves)))
 	forest.position_map = posMap
 
-	i := 0
-	for key, val := range f.PositionMap {
+	//fmt.Println("position map", len(f.PositionMap), f.NumLeaves)
+	for i := uint64(0); i < f.NumLeaves; i++ {
+		key := f.Data.Read(i).Mini()
+		val := f.PositionMap[key]
 		var kb [16]byte
 		copy(kb[:], key[:]) // key is only 12 bytes though!
 		src := C.init_minipos(kb, C.uint64_t(val))
 		destPtr := unsafe.Pointer(C.index_posmap(posMap, C.uint64_t(i)))
 		C.memcpy(destPtr, unsafe.Pointer(&src), C.sizeof_minipos)
-		i++
 	}
 	forest.height = C.uint8_t(f.Rows)
 	forest.num_leaves = C.uint64_t(f.NumLeaves)
@@ -75,6 +79,9 @@ func ToC(f *accumulator.Forest) *C.forest {
 }
 
 func FromC(st *C.forest) *accumulator.Forest {
+	if st == nil {
+		return nil
+	}
 	//fmt.Printf("fromC: %v\n", st.num_leaves)
 	f := accumulator.NewForest(nil)
 	f.NumLeaves = uint64(st.num_leaves)
@@ -101,6 +108,9 @@ func FromC(st *C.forest) *accumulator.Forest {
 
 //export cForestPrint
 func cForestPrint(f *C.forest) *C.char {
+	if f == nil {
+		return C.CString("null tree")
+	}
 	forest := FromC(f)
 	str := forest.ToString()
 	str += forest.PrintPositionMap()
@@ -169,11 +179,26 @@ func cForestPrepareInsertion(f *C.forest, delta C.uint64_t) *C.forest {
 	return ToC(forest)
 }
 
+//export cForestSwapNodes
+func cForestSwapNodes(f *C.forest, from, to uint64, row uint8) *C.forest {
+	forest := fromCTreeOrEmpty(f)
+	if !forest.SwapNodes(accumulator.Arrow{from, to}, row) {
+		return nil
+	}
+	return ToC(forest)
+}
+
 //export cForestFree
 func cForestFree(f *C.forest) {
-	C.free(unsafe.Pointer(f.position_map))
-	C.free(unsafe.Pointer(f.leaves))
-	C.free(unsafe.Pointer(f))
+	if f != nil {
+		if f.position_map != nil {
+			C.free(unsafe.Pointer(f.position_map))
+		}
+		if f.leaves != nil {
+			C.free(unsafe.Pointer(f.leaves))
+		}
+		C.free(unsafe.Pointer(f))
+	}
 }
 
 func main() {}

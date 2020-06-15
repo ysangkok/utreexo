@@ -20,9 +20,17 @@ executable utreexo
                      , monad-loops
                      , aeson
                      , aeson-casing
+                     , hedgehog
+                     , containers
+                     , lens
+                     , bytestring
+                     , binary
+                     , base16-bytestring
+                     , cryptohash-sha256
   default-language:    Haskell2010
   includes: libutreexo.h
   include-dirs: .
   extra-libraries: utreexo
   extra-lib-dirs: .
   ghc-options: -Wall
+  ld-options: -fsanitize=address
