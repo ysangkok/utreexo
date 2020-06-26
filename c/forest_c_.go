@@ -188,6 +188,20 @@ func cForestSwapNodes(f *C.forest, from, to uint64, row uint8) *C.forest {
 	return ToC(forest)
 }
 
+//export cForestHashRow
+func cForestHashRow(f *C.forest, dirt *C.uint64_t, numDirt C.size_t) *C.forest {
+	forest := fromCTreeOrEmpty(f)
+	godirt := make([]uint64, numDirt)
+	for i, _ := range godirt {
+		p := (*uint64)(unsafe.Pointer(uintptr(unsafe.Pointer(dirt)) + unsafe.Sizeof(*dirt)*uintptr(i)))
+		godirt[i] = *p
+	}
+	forest.HashRow(godirt)
+	forest.ToString()
+	v := ToC(forest)
+	return v
+}
+
 //export cForestFree
 func cForestFree(f *C.forest) {
 	if f != nil {

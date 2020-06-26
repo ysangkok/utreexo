@@ -1,8 +1,8 @@
 {-# LANGUAGE ForeignFunctionInterface, DeriveGeneric, ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell #-} -- hedgehog discover
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 import           Hedgehog ((===), annotateShow, annotate)
 import qualified Hedgehog
@@ -32,13 +32,13 @@ import qualified Data.ByteString.Lazy as BS
 import Data.Map (toList, fromList, adjust, Map)
 import Data.Function((&))
 import Control.Lens.Operators ((.~))
-import Control.Lens.At (at)
+import Control.Lens.At (at, ix)
 import Data.Either (fromRight)
 import Data.Functor.Identity (Identity)
 import Data.Word (Word64, Word8, byteSwap64)
 import Data.List (inits, sort, sortOn, elemIndex)
 import Data.List.Split (chunksOf)
-import Data.Maybe (fromMaybe, catMaybes, listToMaybe, fromMaybe)
+import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
 import Data.Either (lefts, rights)
 import Data.Bits
 import qualified Data.Set as Set
@@ -86,6 +86,13 @@ foreign import ccall "libutreexo.h"
     -> CULong
     -> CULong
     -> CChar
+    -> IO (Ptr CForest)
+
+foreign import ccall "libutreexo.h"
+    cForestHashRow
+    :: Ptr CForest
+    -> Ptr CULong
+    -> CSize
     -> IO (Ptr CForest)
 
 foreign import ccall "libutreexo.h &cForestFree"
@@ -250,6 +257,15 @@ swapNodes (Forest forestForeignPtr) from to row =
             newPtr <- cForestSwapNodes forestPtr from to row
             checkNull newPtr
 
+hashRow :: Forest -> [CULong] -> Maybe Forest
+hashRow (Forest ffptr) dirt =
+    unsafePerformIO $
+        withForeignPtr ffptr $ \fptr ->
+            withArrayLen dirt $ \len pptr -> do
+                let csizelen = fromInteger $ toInteger len
+                newPtr <- cForestHashRow fptr pptr csizelen
+                checkNull newPtr
+
 data HForest = HForest {
     hpositions :: Map Word128 Word64
   , hdata :: [CLeaf]
@@ -258,6 +274,10 @@ data HForest = HForest {
 instance IForest HForest where
     ipositions = hpositions
     idata = hdata
+
+child :: CULong -> CChar -> Int
+child pos forestRowsChar =
+   fromInteger $ toInteger $ childMany pos 1 forestRowsChar 
 
 childMany :: CULong -> CChar -> CChar -> Word64
 childMany position dropChar forestRowsChar =
@@ -311,7 +331,7 @@ hswapNodes goforest@(Forest fptr) from to row =
                 let lB = leaf !! (fromInteger $ toInteger $ b+i)
                 let cA = firstTwelveBytes lA
                 let cB = firstTwelveBytes lB
-                gotten <- State.get
+                (gotten :: Map Word128 Word64) <- State.get
                 State.put $ gotten & at cB .~ Just ((fromInteger $ toInteger $ a+i))
                                    & at cA .~ Just ((fromInteger $ toInteger $ b+i))
         newmap = tempmap
@@ -768,6 +788,7 @@ makeDestInRow _ _ _ = error "both parameters empty"
 --      then False
 --      else loop pos < numLeaves
 
+inForest :: Word64 -> Word64 -> Int -> Bool
 inForest pos numLeaves rows | pos < numLeaves = True
 inForest pos numLeaves rows =
   let marker = 1 `shiftL` rows
@@ -776,9 +797,15 @@ inForest pos numLeaves rows =
       newPos = snd $ flip runState pos $ do
                  whileM_ (do gotten<-State.get; return $ gotten .&. marker /= 0) $ do
                    gotten <- State.get
-                   State.put $ ((gotten `shiftL` 1) .&. mask) .|. 1
+                   let newState = ((gotten `shiftL` 1) .&. mask) .|. 1
+                   unless (newState /= gotten) $ error "state did not change"
+                   State.put newState
   in
-      newPos < numLeaves
+      if pos < numLeaves
+          then True
+          else if pos >= mask
+                   then False
+                   else (newPos < numLeaves)
         
       
 
@@ -938,6 +965,7 @@ testsD = testGroup "inForest tests"
     , testCase "529" $ inForest 58 31 5 @?= True
     , testCase "534" $ inForest 61 31 5 @?= False
     , testCase "535" $ inForest 62 31 5 @?= False
+    , testCase "looping" $ inForest 1023 431 9 @?= False
   ]
 
 data Obj = Obj {
@@ -971,26 +999,97 @@ prop_iso =
     let x :: Word128 = ((fromInteger $ toInteger v) `shiftL` 64) .|. (fromInteger $ toInteger w)
     x === (decode $ encode x)
 
-hash :: Word64 -> CLeaf
-hash x = CLeaf (decode f) (decode s)
+sha256 :: Word64 -> CLeaf
+sha256 x =
+  sha256t [x]
+
+sha256t :: Binary a => [a] -> CLeaf
+sha256t x = CLeaf (decode f) (decode s)
   where
     ctx0   = SHA256.init 
-    ctx    = foldl SHA256.update ctx0 [BS.toStrict $ encode x]
+    ctx    = foldl SHA256.update ctx0 (map (BS.toStrict . encode) x)
     digest = SHA256.finalize ctx
     (f, s) = BS.splitAt 16 $ BS.fromStrict digest
 
---numLeaves :: Forest -> Word64
---numLeaves (Forest fptr) = unsafePerformIO $ do
---  withForeignPtr fptr $ \for -> do
---    f <- peek for
---    return $ num_leaves f
+numLeaves :: Forest -> Word64
+numLeaves (Forest fptr) = unsafePerformIO $ do
+  withForeignPtr fptr $ \for -> do
+    f <- peek for
+    return $ num_leaves f
 
-prop_reverse :: Hedgehog.Property
-prop_reverse =
+parentHash :: CLeaf -> CLeaf -> CLeaf
+parentHash l r =
+    sha256t [first  l, second l, first r, second r]
+
+hhashRow forest dirt =
+    let
+        oldpos = ipositions forest
+        olddat :: [CLeaf]
+        olddat = idata forest
+        hashed :: [CLeaf]
+        hashed = flip map dirt $ \x ->
+          let
+            chld = child x (rows forest)
+          in
+            parentHash (olddat !! chld) (olddat !! ( chld .|. 1))
+        culongToInt :: CULong -> Int
+        culongToInt = fromInteger . toInteger
+        intDirt :: [Int]
+        intDirt = map culongToInt dirt
+        written = snd $ flip runState olddat $ do
+            forM_ (zip intDirt hashed) $ \(hp :: Int, result :: CLeaf) -> do
+                (gotten :: [CLeaf]) <- State.get
+                let new = gotten & ix hp .~ result
+                State.put new
+    in
+        Just $ HForest oldpos written
+
+
+prop_hashRow :: Hedgehog.Property
+prop_hashRow =
+  Hedgehog.property $ do
+    let vals = Gen.set (Range.constantFrom 10 10 1000) (Gen.word64 $ Range.constantFrom 0 0 1000)
+    xs <- Hedgehog.forAll vals
+
+    let cuLongToWord64 = fromInteger . toInteger
+    let ccharToWord8 = fromInteger . toInteger
+    let word8ToInt = fromInteger . toInteger
+    let mforest = forestWithLeaves [CLeaf (fromInteger $ toInteger x) 0 | x <- Set.toList xs]
+    case mforest of
+      Nothing -> Hedgehog.discard
+      _ -> return ()
+    let forest = fromMaybe (error "impossible with discard above") mforest
+    let inserted = fromInteger $ toInteger $ length xs - 1
+    let dirt = Gen.set (Range.constantFrom 1 1 100) (Gen.word64 $ Range.constantFrom inserted inserted (2 ^ (fromInteger $ toInteger $ rows forest) - 1))
+    dirtSet <- Hedgehog.forAll dirt
+    let dirtList :: [CULong] = map (fromInteger.toInteger) $ Set.toList dirtSet
+    let word8Rows :: Word8 = ccharToWord8 $ rows forest
+    let filtered = [x | x <- dirtList
+                        , let chld = fromInteger $ toInteger $ child x (rows forest) .|. 1
+                        --, let thisRow = detectRow (cuLongToWord64 x) word8Rows
+                        --, let dataIdx = cuLongToWord64 x 
+                        , let numData = numLeaves forest
+                        , inForest chld numData (word8ToInt word8Rows)
+                        --, thisRow /= 0
+                        --, x > (fromInteger $ toInteger $ numLeaves forest)
+                        --, thisRow == 0
+                        --, trace (show (dataIdx, numData)) (dataIdx > numData)
+                        ]
+    if length filtered == 0
+        then Hedgehog.discard
+        else return ()
+    let ref = hhashRow forest filtered
+    let our = hhashRow forest filtered
+    fmap idata ref === fmap idata our
+    fmap ipositions ref === fmap ipositions our
+
+
+prop_swapNodes :: Hedgehog.Property
+prop_swapNodes =
   Hedgehog.property $ do
     let vals = Gen.set (Range.constantFrom 3 3 99) (Gen.word64 $ Range.constantFrom 1 1 99)
     xs <- Hedgehog.forAll vals
-    let Just forest = forestWithLeaves [hash x | x <- Set.toList xs]
+    let Just forest = forestWithLeaves [sha256 x | x <- Set.toList xs]
     annotateShow $ rows forest
     annotate $ printTree forest
     let fromGen = Gen.integral $ Range.constantFrom 1 0 (fromInteger $ toInteger $ 2 ^ (rows forest) - 1)
@@ -1071,7 +1170,12 @@ main = do
     --let Just forest6 = swapNodes forest5 0 10 3
     --print $ printTree forest6
 
-    res <- Hedgehog.checkSequential $$(Hedgehog.discover)
+    let li = [  ("prop_swapNodes", prop_swapNodes)
+              , ("prop_iso", prop_iso)
+              , ("prop_hashRow", prop_hashRow)
+             ]
+    let group = Hedgehog.Group "example" li
+    res <- Hedgehog.checkSequential group
     print res
     
     tree <- testSpec "hspec tests" testsHspec
