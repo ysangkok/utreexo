@@ -176,6 +176,10 @@ tests = testGroup "parentMany/getRootsReverse tests"
 class IForest a where
     ipositions :: a -> Map Word128 Word64
     idata :: a -> [CLeaf]
+    inumleaves :: a -> Word64
+
+toRecord :: (IForest a) => Maybe a -> Maybe (Map Word128 Word64, [CLeaf], Word64)
+toRecord = fmap (\a -> (ipositions a, idata a, inumleaves a))
 
 instance IForest Forest where
     ipositions (Forest forestForeignPtr) =
@@ -194,6 +198,10 @@ instance IForest Forest where
                 peeked_forest <- peek forestPtr
                 let numleaves = fromInteger $ toInteger $ leaves_size peeked_forest
                 peekArray numleaves $ leaves peeked_forest
+    inumleaves (Forest fptr) = unsafePerformIO $ do
+      withForeignPtr fptr $ \for -> do
+        f <- peek for
+        return $ num_leaves f
 
 printTree :: Forest -> String
 printTree (Forest forestForeignPtr) = unsafePerformIO $ do
@@ -269,11 +277,13 @@ hashRow (Forest ffptr) dirt =
 data HForest = HForest {
     hpositions :: Map Word128 Word64
   , hdata :: [CLeaf]
-}
+  , hnumleaves :: Word64
+} deriving (Eq, Show)
 
 instance IForest HForest where
     ipositions = hpositions
     idata = hdata
+    inumleaves = hnumleaves
 
 child :: CULong -> CChar -> Int
 child pos forestRowsChar =
@@ -370,10 +380,10 @@ hswapNodes goforest@(Forest fptr) from to row =
                 lB = row0leaf !! t
                 row0map = posi   & at (firstTwelveBytes lA) .~ Just f2
                                  & at (firstTwelveBytes lB) .~ Just t2
-              in Just $ HForest row0map row0leaf
+              in Just $ HForest row0map row0leaf (inumleaves goforest)
             else if a == b
                 then Nothing
-                else Just $ HForest newmap newleaf
+                else Just $ HForest newmap newleaf (inumleaves goforest)
 
 
 testLeaves :: [CLeaf]
@@ -1004,22 +1014,16 @@ sha256 x =
   sha256t [x]
 
 sha256t :: Binary a => [a] -> CLeaf
-sha256t x = CLeaf (decode f) (decode s)
+sha256t x = CLeaf (byteSwapWord128 $ decode f) (byteSwapWord128 $ decode s)
   where
     ctx0   = SHA256.init 
     ctx    = foldl SHA256.update ctx0 (map (BS.toStrict . encode) x)
     digest = SHA256.finalize ctx
     (f, s) = BS.splitAt 16 $ BS.fromStrict digest
 
-numLeaves :: Forest -> Word64
-numLeaves (Forest fptr) = unsafePerformIO $ do
-  withForeignPtr fptr $ \for -> do
-    f <- peek for
-    return $ num_leaves f
-
 parentHash :: CLeaf -> CLeaf -> CLeaf
 parentHash l r =
-    sha256t [first  l, second l, first r, second r]
+    sha256t [byteSwapWord128 $ first  l, byteSwapWord128 $ second l, byteSwapWord128 $ first r, byteSwapWord128 $ second r]
 
 hhashRow forest dirt =
     let
@@ -1030,8 +1034,11 @@ hhashRow forest dirt =
         hashed = flip map dirt $ \x ->
           let
             chld = child x (rows forest)
+            chldA = olddat !! chld
+            chldB = olddat !! ( chld .|. 1)
+            abHash = parentHash chldA chldB
           in
-            parentHash (olddat !! chld) (olddat !! ( chld .|. 1))
+            abHash --trace (show (chld, chldA, chldB, abHash)) abHash
         culongToInt :: CULong -> Int
         culongToInt = fromInteger . toInteger
         intDirt :: [Int]
@@ -1041,8 +1048,11 @@ hhashRow forest dirt =
                 (gotten :: [CLeaf]) <- State.get
                 let new = gotten & ix hp .~ result
                 State.put new
+        -- this is not in the go source, but because our positions include the hash
+        -- and not the index, it wouldn't be consistent if we didn't do this.
+        -- let newpos = fromList [(firstTwelveBytes $ written !! i, y) | (i,(x,y)) <- zip [0..] (toList oldpos)]
     in
-        Just $ HForest oldpos written
+        Just $ HForest oldpos written (inumleaves forest)
 
 
 prop_hashRow :: Hedgehog.Property
@@ -1059,6 +1069,7 @@ prop_hashRow =
       Nothing -> Hedgehog.discard
       _ -> return ()
     let forest = fromMaybe (error "impossible with discard above") mforest
+    annotateShow $ ipositions forest
     let inserted = fromInteger $ toInteger $ length xs - 1
     let dirt = Gen.set (Range.constantFrom 1 1 100) (Gen.word64 $ Range.constantFrom inserted inserted (2 ^ (fromInteger $ toInteger $ rows forest) - 1))
     dirtSet <- Hedgehog.forAll dirt
@@ -1068,7 +1079,7 @@ prop_hashRow =
                         , let chld = fromInteger $ toInteger $ child x (rows forest) .|. 1
                         --, let thisRow = detectRow (cuLongToWord64 x) word8Rows
                         --, let dataIdx = cuLongToWord64 x 
-                        , let numData = numLeaves forest
+                        , let numData = inumleaves forest
                         , inForest chld numData (word8ToInt word8Rows)
                         --, thisRow /= 0
                         --, x > (fromInteger $ toInteger $ numLeaves forest)
@@ -1078,10 +1089,15 @@ prop_hashRow =
     if length filtered == 0
         then Hedgehog.discard
         else return ()
-    let ref = hhashRow forest filtered
+    annotate $ printTree forest
+    annotateShow $ ipositions forest
+    let ref = hashRow forest filtered
+    case fmap printTree ref of
+      Nothing -> return ()
+      Just x -> annotate x
+    annotateShow $ fmap ipositions ref
     let our = hhashRow forest filtered
-    fmap idata ref === fmap idata our
-    fmap ipositions ref === fmap ipositions our
+    toRecord ref === toRecord our
 
 
 prop_swapNodes :: Hedgehog.Property
@@ -1120,8 +1136,7 @@ prop_swapNodes =
     --annotateShow $ numLeaves forest
     --annotateShow $ length $ ipositions forest
     --annotateShow $ length $ idata forest
-    fmap idata ref === fmap idata our
-    fmap ipositions ref === fmap ipositions our
+    toRecord ref === toRecord our
 
 testsE :: TestTree
 testsE = testGroup "childMany tests" [
@@ -1169,6 +1184,9 @@ main = do
     --print $ printTree forest5
     --let Just forest6 = swapNodes forest5 0 10 3
     --print $ printTree forest6
+    
+    -- gammel: putStrLn "ToC skriver fra Data til PositionMap, skal fixes så hashRow ikke behøver røre PositionMap"
+    putStrLn "Hvorfor mismatcher positions i hashRow test nu hvor data ikke mere bruges til PositionMap beregning?"
 
     let li = [  ("prop_swapNodes", prop_swapNodes)
               , ("prop_iso", prop_iso)

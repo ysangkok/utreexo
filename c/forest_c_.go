@@ -64,14 +64,19 @@ func ToC(f *accumulator.Forest) *C.forest {
 	forest.position_map = posMap
 
 	//fmt.Println("position map", len(f.PositionMap), f.NumLeaves)
-	for i := uint64(0); i < f.NumLeaves; i++ {
-		key := f.Data.Read(i).Mini()
-		val := f.PositionMap[key]
+	i := 0
+	for key, val := range f.PositionMap {
+		//for i := uint64(0); i < f.NumLeaves; i++ {
+		//key := f.Data.Read(uint64(i)).Mini()
+		//val := f.PositionMap[key]
+		//var kb [16]byte
+		//binary.LittleEndian.PutUint64(kb[:], i)
 		var kb [16]byte
 		copy(kb[:], key[:]) // key is only 12 bytes though!
 		src := C.init_minipos(kb, C.uint64_t(val))
 		destPtr := unsafe.Pointer(C.index_posmap(posMap, C.uint64_t(i)))
 		C.memcpy(destPtr, unsafe.Pointer(&src), C.sizeof_minipos)
+		i++
 	}
 	forest.height = C.uint8_t(f.Rows)
 	forest.num_leaves = C.uint64_t(f.NumLeaves)
@@ -86,19 +91,28 @@ func FromC(st *C.forest) *accumulator.Forest {
 	f := accumulator.NewForest(nil)
 	f.NumLeaves = uint64(st.num_leaves)
 	f.Rows = uint8(st.height)
-	ma := make(map[accumulator.MiniHash]uint64)
-	for i := uint64(0); i < uint64(st.num_leaves); i++ {
-		miniposPtr := C.index_posmap(st.position_map, C.uint64_t(i))
-		mini, pos := MiniPosFor(miniposPtr)
-		ma[mini] = uint64(pos)
-	}
-	f.PositionMap = ma
 
 	dat := make([]accumulator.Hash, st.leaves_size)
 	for i := uint64(0); i < uint64(st.leaves_size); i++ {
 		leafPtr := C.index_leaves(st.leaves, C.uint64_t(i))
 		dat[i] = LeafFor(leafPtr)
 	}
+
+	ma := make(map[accumulator.MiniHash]uint64)
+	for i := uint64(0); i < uint64(st.num_leaves); i++ {
+		miniposPtr := C.index_posmap(st.position_map, C.uint64_t(i))
+		mini, pos := MiniPosFor(miniposPtr)
+		//if mini != dat[i].Mini() {
+		//	if false {
+		//		a := [12]byte(mini)
+		//		b := [12]byte(dat[i].Mini())
+		//		panic(fmt.Sprintf("mismatch in FromC\n%v%v", hex.Dump(a[:]), hex.Dump(b[:])))
+		//	}
+		//	//mini = dat[i].Mini()
+		//}
+		ma[mini] = uint64(pos)
+	}
+	f.PositionMap = ma
 
 	ram := new(accumulator.RamForestData)
 	ram.M = dat
@@ -197,7 +211,7 @@ func cForestHashRow(f *C.forest, dirt *C.uint64_t, numDirt C.size_t) *C.forest {
 		godirt[i] = *p
 	}
 	forest.HashRow(godirt)
-	forest.ToString()
+	//forest.ToString()
 	v := ToC(forest)
 	return v
 }
