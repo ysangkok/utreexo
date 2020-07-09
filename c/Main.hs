@@ -352,13 +352,6 @@ hswapNodes goforest from to row =
                 State.put $ gotten & at cB .~ Just (a+i)
                                    & at cA .~ Just (b+i)
         newmap = tempmap
-        --filterer :: [(Word128, Word64)] -> [(Word128, Word64)]
-        --filterer = filter (\(mini :: Word128, po :: Word64) ->
-        --                      ((po < numLeaves goforest) :: Bool))
-        --newmap =
-        --    toList tempmap
-        --      & filterer
-        --      & fromList
         bottomup = snd $ flip runState (leaf, a, b) $ do
             forM_ [0..row] $ \r -> do
                 (before, ia, ib) <- State.get
@@ -790,21 +783,6 @@ makeDestInRow (Just (_, to)) _          rows =
   (True, parent to rows)
 makeDestInRow _ _ _ = error "both parameters empty"
 
---inForest2 :: Word64 -> Word64 -> Int -> Bool
---inForest2 pos numLeaves rows | pos < numLeaves = True
---inForest2 pos numLeaves rows =
---  let marker = 1 `shiftL` rows
---      mask = (marker `shiftL` 1) - 1
---      loop :: Word64 -> Word64
---      loop pos =
---        if pos .&. marker /= 0
---          then loop ((pos `shiftL` 1) .&. mask) .|. 1
---          else pos
---  in
---    if pos >= mask
---      then False
---      else loop pos < numLeaves
-
 inForest :: Word64 -> Word64 -> Int -> Bool
 inForest pos numLeaves rows | pos < numLeaves = True
 inForest pos numLeaves rows =
@@ -1056,22 +1034,19 @@ hhashRow forest dirt =
                 (gotten :: [CLeaf]) <- State.get
                 let new = gotten & ix hp .~ result
                 State.put new
-        -- this is not in the go source, but because our positions include the hash
-        -- and not the index, it wouldn't be consistent if we didn't do this.
-        -- let newpos = fromList [(firstTwelveBytes $ written !! i, y) | (i,(x,y)) <- zip [0..] (toList oldpos)]
     in
         Just $ HForest oldpos written (inumleaves forest) (irows forest)
 
-word64ToWord128 = fromInteger . toInteger
 intToCSize = fromInteger . toInteger
 intToWord64 = fromInteger . toInteger
-word64ToInt = fromInteger . toInteger
 ccharToInt = fromInteger . toInteger
 ccharToInteger = fromInteger . toInteger
+ccharToWord8 = fromInteger . toInteger
+word64ToWord128 = fromInteger . toInteger
+word64ToInt = fromInteger . toInteger
 word64ToCULong = fromInteger . toInteger
 cuLongToWord64 = fromInteger . toInteger
 cuLongToInt = fromInteger . toInteger
-ccharToWord8 = fromInteger . toInteger
 word8ToInt = fromInteger . toInteger
 word8ToCChar = fromInteger . toInteger
 intToCULong = fromInteger . toInteger
@@ -1095,14 +1070,8 @@ prop_hashRow =
     let word8Rows :: Word8 = ccharToWord8 $ rows forest
     let filtered = [x | x <- dirtList
                         , let chld = intToWord64 $ child x (rows forest) .|. 1
-                        --, let thisRow = detectRow (cuLongToWord64 x) word8Rows
-                        --, let dataIdx = cuLongToWord64 x
                         , let numData = inumleaves forest
                         , inForest chld numData (word8ToInt word8Rows)
-                        --, thisRow /= 0
-                        --, x > (fromInteger $ toInteger $ numLeaves forest)
-                        --, thisRow == 0
-                        --, trace (show (dataIdx, numData)) (dataIdx > numData)
                         ]
     if length filtered == 0
         then Hedgehog.discard
