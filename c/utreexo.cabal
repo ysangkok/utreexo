@@ -27,6 +27,7 @@ executable utreexo
                      , binary
                      , base16-bytestring
                      , cryptohash-sha256
+                     , zippers
   default-language:    Haskell2010
   includes: libutreexo.h
   include-dirs: .

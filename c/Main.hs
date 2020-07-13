@@ -3,6 +3,10 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE DeriveFoldable #-}
 
 import           Hedgehog ((===), annotateShow, annotate)
 import qualified Hedgehog
@@ -22,7 +26,7 @@ import Foreign.C.String (peekCString)
 
 import Test.Tasty
 import Test.Tasty.HUnit
-import Test.Tasty.Hspec
+import Test.Tasty.Hspec (Spec, shouldBe, testSpec, runIO, it)
 
 import qualified Data.ByteString.Base16.Lazy as B16
 import Data.Binary (Binary(put,get), encode, decode)
@@ -31,7 +35,7 @@ import Data.ByteString.Lazy.Char8 (unpack, pack)
 import qualified Data.ByteString.Lazy as BS
 import Data.Map (toList, fromList, adjust, Map, difference)
 import Data.Function((&))
-import Control.Lens.Operators ((.~))
+import Control.Lens.Operators ((.~), (%~))
 import Control.Lens.At (at, ix)
 import Data.Either (fromRight)
 import Data.Functor.Identity (Identity)
@@ -42,7 +46,9 @@ import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
 import Data.Either (lefts, rights)
 import Data.Bits
 import qualified Data.Set as Set
-import Data.Tree (Tree, unfoldForest, drawForest)
+import qualified Data.Tree (Tree(Node), unfoldTree, drawForest, Forest)
+
+import Control.Zipper (fromWithin, rezip, zipper, focus, downward, Top, (:>>), Zipper)
 
 import Control.Monad.State.Lazy (runState, modify, lift, State)
 import qualified Control.Monad.State.Lazy as State (get, put)
@@ -1206,6 +1212,11 @@ prop_delete =
     let our = hremove          forest dirtList
     toRecord ref === toRecord our
 
+data T a = N (a, CLeaf) (T a) (T a) | L deriving (Functor, Foldable, Traversable)
+
+type I = T Int
+
+genFun :: IForest a => a -> (Int, Int) -> ((Int, CLeaf), Maybe ((Int, Int), (Int, Int)))
 genFun forest (idx, row) =
   let
     dat = idata forest
@@ -1213,21 +1224,60 @@ genFun forest (idx, row) =
     firstChild = child (intToCULong idx) (irows forest)
   in
     if row == 0
-      then ((idx, node), []) -- don't descend more once we reached height 0
-      else ((idx, node), [(firstChild, row - 1), (firstChild .|. 1, row - 1)])
+      then ((idx, node), Nothing) -- don't descend more once we reached height 0
+      else ((idx, node), Just ((firstChild, row - 1), (firstChild .|. 1, row - 1)))
+
+myUnfoldTree :: ((Int, Int) -> ((Int, CLeaf), Maybe ((Int, Int), (Int, Int)))) -> (Int, Int) -> I
+myUnfoldTree folder root =
+    let
+      ((idx, leaf), maybeChildren) = folder root
+    in
+      case maybeChildren of
+        Nothing -> N (idx, leaf) L L
+        Just ((idx1, leaf1), (idx2, leaf2)) -> N (idx, leaf) (myUnfoldTree folder (idx1, leaf1)) (myUnfoldTree folder (idx2, leaf2))
+
+myUnfoldForest :: ((Int, Int) -> ((Int, CLeaf), Maybe ((Int, Int), (Int, Int)))) -> [(Int, Int)] -> [I]
+myUnfoldForest folder = map (myUnfoldTree folder)
+
+zipTrans :: (Top :>> I) -> Zipper (Zipper Top Int I) Int Int
+zipTrans topZipper = topZipper & fromWithin traverse & focus .~ 4200
+
+testDataTreeZipper = let
+    zipped = zipper (Data.Tree.Node "a" [])
+    transd :: Zipper (Zipper Top Int (Data.Tree.Tree [Char])) Int [Char] = zipped & fromWithin traverse & focus .~ "J"
+    in rezip transd
+
+transTree :: I -> I 
+transTree f =
+    let zipping :: Top :>> I = zipper f
+        transd = zipTrans zipping
+    in rezip transd
+
+binTreeToDataTree :: I -> ((Int, CLeaf), [I])
+binTreeToDataTree (N (idx, leaf) L L) = ((idx, leaf), [])
+binTreeToDataTree (N (idx, leaf) t1@(N (cidx1, _) _ _) t2@(N (cidx2, _) _ _)) = ((idx, leaf), [t1, t2])
+binTreeToDataTree (N _ _ _) = error "tree not perfect"
+binTreeToDataTree L = error "called on leaf"
+
+myTreeToDataTree :: I -> Data.Tree.Tree (Int, CLeaf)
+myTreeToDataTree t =
+    Data.Tree.unfoldTree binTreeToDataTree t
 
 main :: IO ()
 main = do
     let Just forest = forestWithLeaves testLeaves
-    let Just forest2 = prepareInsertion forest 12
-    let Just forest3 = addToForest forest2 testLeaves2
-    let Just forest4 = deleteFromForest forest3 [0, 2, 4]
-    let Just forest5 = addToForest forest4 testLeaves3
-    --print $ printTree forest5
-    let Just forest6 = swapNodes forest5 0 10 3
-    --print $ printTree forest6
-    let f = unfoldForest (genFun forest6) [(word64ToInt x, irows forest6) | x <- fst $ getRootsReverse (inumleaves forest6) (ccharToInt $ irows forest6)]
-    putStrLn $ drawForest (map (fmap show) f)
+    --let Just forest2 = prepareInsertion forest 12
+    let Just forest3 = addToForest forest testLeaves2
+    --let Just forest4 = deleteFromForest forest3 [0, 2, 4]
+    putStrLn $ printTree forest3
+    let Just forest6 = swapNodes forest3 8 9 1 -- swapping these two nodes on level 1 (just above leaves) will also swap the leaves
+    putStrLn $ printTree forest6
+    --let Just forest5 = addToForest forest4 testLeaves3
+    let (rootPos, rootRows) = getRootsReverse (inumleaves forest6) (ccharToInt $ irows forest6)
+    let f :: [I] = myUnfoldForest (genFun forest6) [(word64ToInt rootPos, rowsInThisTree) | (rootPos, rowsInThisTree) <- zip rootPos rootRows]
+    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree f)
+    let f2 :: [I] = f & ix 1 %~ transTree
+    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree f2)
 
     let li = [  ("prop_swapNodes", prop_swapNodes)
               , ("prop_iso", prop_iso)
