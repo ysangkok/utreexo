@@ -35,8 +35,9 @@ import Data.ByteString.Lazy.Char8 (unpack, pack)
 import qualified Data.ByteString.Lazy as BS
 import Data.Map (toList, fromList, adjust, Map, difference)
 import Data.Function((&))
-import Control.Lens.Operators ((.~), (%~))
+import Control.Lens.Operators ((.~), (%~)) -- <&>
 import Control.Lens.At (at, ix)
+import Control.Lens.Combinators (Lens', lens) -- both, _1
 import Data.Either (fromRight)
 import Data.Functor.Identity (Identity)
 import Data.Word (Word64, Word8, byteSwap64)
@@ -48,7 +49,9 @@ import Data.Bits
 import qualified Data.Set as Set
 import qualified Data.Tree (Tree(Node), unfoldTree, drawForest, Forest)
 
-import Control.Zipper (fromWithin, rezip, zipper, focus, downward, Top, (:>>), Zipper)
+import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>), Zipper) -- downward
+import Data.Tuple (swap)
+--import Control.Lens.Plated (plate)
 
 import Control.Monad.State.Lazy (runState, modify, lift, State)
 import qualified Control.Monad.State.Lazy as State (get, put)
@@ -1239,8 +1242,13 @@ myUnfoldTree folder root =
 myUnfoldForest :: ((Int, Int) -> ((Int, CLeaf), Maybe ((Int, Int), (Int, Int)))) -> [(Int, Int)] -> [I]
 myUnfoldForest folder = map (myUnfoldTree folder)
 
-zipTrans :: (Top :>> I) -> Zipper (Zipper Top Int I) Int Int
-zipTrans topZipper = topZipper & fromWithin traverse & focus .~ 4200
+set :: T a -> (T a, T a) -> T a
+set (N k _ _) (a, b) = N k a b
+
+chldr :: Lens' I (I, I)
+chldr = lens (\(N k a b) -> (a, b)) set
+
+zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
 
 testDataTreeZipper = let
     zipped = zipper (Data.Tree.Node "a" [])
