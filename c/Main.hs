@@ -35,9 +35,10 @@ import Data.ByteString.Lazy.Char8 (unpack, pack)
 import qualified Data.ByteString.Lazy as BS
 import Data.Map (toList, fromList, adjust, Map, difference)
 import Data.Function((&))
-import Control.Lens.Operators ((.~), (%~)) -- <&>
+import Control.Lens.Operators ((.~), (%~), (^.) , (^?)) -- <&>
+                        --     set   upd   view   list-view
 import Control.Lens.At (at, ix)
-import Control.Lens.Combinators (Lens', lens) -- both, _1
+import Control.Lens.Combinators (Lens', lens, _1, _2) -- both, _1
 import Data.Either (fromRight)
 import Data.Functor.Identity (Identity)
 import Data.Word (Word64, Word8, byteSwap64)
@@ -1215,11 +1216,11 @@ prop_delete =
     let our = hremove          forest dirtList
     toRecord ref === toRecord our
 
-data T a = N (a, CLeaf) (T a) (T a) | L deriving (Functor, Foldable, Traversable)
+data T a = N CLeaf (T a) (T a) | L deriving (Functor, Foldable, Traversable, Eq, Show)
+type I = T ()
 
-type I = T Int
-
-genFun :: IForest a => a -> (Int, Int) -> ((Int, CLeaf), Maybe ((Int, Int), (Int, Int)))
+-- node creation helper function for unfolders in the style of Data.Tree.unfoldTree
+genFun :: IForest a => a -> (Int, Int) -> (CLeaf, Maybe ((Int, Int), (Int, Int)))
 genFun forest (idx, row) =
   let
     dat = idata forest
@@ -1227,49 +1228,67 @@ genFun forest (idx, row) =
     firstChild = child (intToCULong idx) (irows forest)
   in
     if row == 0
-      then ((idx, node), Nothing) -- don't descend more once we reached height 0
-      else ((idx, node), Just ((firstChild, row - 1), (firstChild .|. 1, row - 1)))
+      then (node, Nothing) -- don't descend more once we reached height 0
+      else (node, Just ((firstChild, row - 1), (firstChild .|. 1, row - 1)))
 
-myUnfoldTree :: ((Int, Int) -> ((Int, CLeaf), Maybe ((Int, Int), (Int, Int)))) -> (Int, Int) -> I
+-- create GADT tree in the same way Data.Tree.unfoldTree works
+myUnfoldTree :: ((Int, Int) -> (CLeaf, Maybe ((Int, Int), (Int, Int)))) -> (Int, Int) -> I
 myUnfoldTree folder root =
     let
-      ((idx, leaf), maybeChildren) = folder root
+      (leaf, maybeChildren) = folder root
     in
       case maybeChildren of
-        Nothing -> N (idx, leaf) L L
-        Just ((idx1, leaf1), (idx2, leaf2)) -> N (idx, leaf) (myUnfoldTree folder (idx1, leaf1)) (myUnfoldTree folder (idx2, leaf2))
+        Nothing -> N leaf L L
+        Just (leaf1, leaf2) -> N leaf (myUnfoldTree folder leaf1) (myUnfoldTree folder leaf2)
 
-myUnfoldForest :: ((Int, Int) -> ((Int, CLeaf), Maybe ((Int, Int), (Int, Int)))) -> [(Int, Int)] -> [I]
+-- create GADT forest in the same way Data.Tree.unfoldForest works
+myUnfoldForest :: ((Int, Int) -> (CLeaf, Maybe ((Int, Int), (Int, Int)))) -> [(Int, Int)] -> [I]
 myUnfoldForest folder = map (myUnfoldTree folder)
 
-set :: T a -> (T a, T a) -> T a
-set (N k _ _) (a, b) = N k a b
-
+-- children of a GADT tree node
 chldr :: Lens' I (I, I)
-chldr = lens (\(N k a b) -> (a, b)) set
+chldr = lens get set
+    where
+        get (N _ a b) = (a, b)
+        get _ = error "only works on non-leaves"
+        set :: I -> (I, I) -> I
+        set (N k _ _) (a, b) = N k a b
+        set _ _ = error "only works on non-leaves"
 
+-- swap nodes of root
 zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
 
+-- sample zipper of Data.Tree. unused
 testDataTreeZipper = let
     zipped = zipper (Data.Tree.Node "a" [])
     transd :: Zipper (Zipper Top Int (Data.Tree.Tree [Char])) Int [Char] = zipped & fromWithin traverse & focus .~ "J"
     in rezip transd
 
+-- swap children of root node using zipper
 transTree :: I -> I 
 transTree f =
     let zipping :: Top :>> I = zipper f
         transd = zipTrans zipping
     in rezip transd
 
-binTreeToDataTree :: I -> ((Int, CLeaf), [I])
-binTreeToDataTree (N (idx, leaf) L L) = ((idx, leaf), [])
-binTreeToDataTree (N (idx, leaf) t1@(N (cidx1, _) _ _) t2@(N (cidx2, _) _ _)) = ((idx, leaf), [t1, t2])
+-- convert GADT tree node to arguments for Data.Tree.unfoldTree
+binTreeToDataTree :: I -> (CLeaf, [I])
+binTreeToDataTree (N leaf L L) = (leaf, [])
+binTreeToDataTree (N leaf t1@(N _ _ _) t2@(N _ _ _)) = (leaf, [t1, t2])
 binTreeToDataTree (N _ _ _) = error "tree not perfect"
 binTreeToDataTree L = error "called on leaf"
 
-myTreeToDataTree :: I -> Data.Tree.Tree (Int, CLeaf)
+-- convert GADT tree to Data.Tree for easier printing
+myTreeToDataTree :: I -> Data.Tree.Tree CLeaf
 myTreeToDataTree t =
     Data.Tree.unfoldTree binTreeToDataTree t
+
+toGADT :: IForest a => a -> [I]
+toGADT f =
+    let
+        (rootPos, rootRows) = getRootsReverse (inumleaves f) (ccharToInt $ irows f)
+    in
+        myUnfoldForest (genFun f) [(word64ToInt rootPos, rowsInThisTree) | (rootPos, rowsInThisTree) <- zip rootPos rootRows]
 
 main :: IO ()
 main = do
@@ -1281,11 +1300,13 @@ main = do
     let Just forest6 = swapNodes forest3 8 9 1 -- swapping these two nodes on level 1 (just above leaves) will also swap the leaves
     putStrLn $ printTree forest6
     --let Just forest5 = addToForest forest4 testLeaves3
-    let (rootPos, rootRows) = getRootsReverse (inumleaves forest6) (ccharToInt $ irows forest6)
-    let f :: [I] = myUnfoldForest (genFun forest6) [(word64ToInt rootPos, rowsInThisTree) | (rootPos, rowsInThisTree) <- zip rootPos rootRows]
+    let f = toGADT forest3
     putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree f)
     let f2 :: [I] = f & ix 1 %~ transTree
     putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree f2)
+
+    --print $ f2 ^? (ix 1).chldr._1 == toGADT forest6 ^? (ix 1).chldr._1
+    print $ f2 == toGADT forest6
 
     let li = [  ("prop_swapNodes", prop_swapNodes)
               , ("prop_iso", prop_iso)
