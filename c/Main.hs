@@ -8,6 +8,8 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DeriveFoldable #-}
 
+import Prelude hiding (drop)
+
 import           Hedgehog ((===), annotateShow, annotate)
 import qualified Hedgehog
 import qualified Hedgehog.Gen as Gen
@@ -18,41 +20,35 @@ import Data.WideWord.Word128 (Word128(Word128), byteSwapWord128, word128Hi64, wo
 import qualified Crypto.Hash.SHA256 as SHA256
 import System.IO.Unsafe (unsafePerformIO)
 import Forest
-import Foreign.Ptr (nullPtr, FunPtr, plusPtr, castPtr)
-import Foreign (Ptr, peek, withArrayLen, peekArray, ForeignPtr, newForeignPtr, withForeignPtr, poke, pokeArray)
+import Foreign.Ptr (nullPtr, FunPtr)
+import Foreign (Ptr, peek, withArrayLen, peekArray, ForeignPtr, newForeignPtr, withForeignPtr)
 import Foreign.C (CSize(CSize), CULong(CULong), CChar(CChar))
-import Foreign.Marshal.Alloc (free, alloca)
+import Foreign.Marshal.Alloc (free)
 import Foreign.C.String (peekCString)
 
-import Test.Tasty
+import Test.Tasty hiding (after)
 import Test.Tasty.HUnit
 import Test.Tasty.Hspec (Spec, shouldBe, testSpec, runIO, it)
 
-import qualified Data.ByteString.Base16.Lazy as B16
 import Data.Binary (Binary(put,get), encode, decode)
-import Data.ByteString.Lazy (toStrict, ByteString)
-import Data.ByteString.Lazy.Char8 (unpack, pack)
+import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as BS
-import Data.Map (toList, fromList, adjust, Map, difference)
+import Data.Map (fromList, Map, difference)
 import Data.Function((&))
-import Control.Lens.Operators ((.~), (%~), (^.) , (^?)) -- <&>
+import Control.Lens.Operators ((.~), (%~)) -- <&>
                         --     set   upd   view   list-view
 import Control.Lens.At (at, ix)
-import Control.Lens.Combinators (Lens', lens, _1, _2) -- both, _1
-import Data.Either (fromRight)
-import Data.Functor.Identity (Identity)
-import Data.Word (Word64, Word8, byteSwap64)
-import Data.List (inits, sort, sortOn, elemIndex)
+import Control.Lens.Combinators (Lens', lens) -- both, _1
+import Data.Word (Word64, Word8) -- byteSwap64
+import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
-import Data.Either (lefts, rights)
 import Data.Bits
 import qualified Data.Set as Set
-import qualified Data.Tree (Tree(Node), unfoldTree, drawForest, Forest)
+import qualified Data.Tree (Tree, unfoldTree, drawForest)
 
 import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>), Zipper) -- downward
 import Data.Tuple (swap)
---import Control.Lens.Plated (plate)
 
 import Control.Monad.State.Lazy (runState, modify, lift, State)
 import qualified Control.Monad.State.Lazy as State (get, put)
@@ -61,10 +57,9 @@ import Pipes (yield, Producer)
 import Control.Monad (forM_, unless, mzero)
 import Control.Monad.Loops (whileM_)
 
-import Debug.Trace
-import Data.Aeson (eitherDecodeFileStrict', Array, FromJSON(..), ToJSON(..), genericToJSON, genericParseJSON)
+import Data.Aeson (eitherDecodeFileStrict', FromJSON(..), ToJSON(..), genericToJSON, genericParseJSON)
 import Data.Aeson.Casing
-import GHC.Generics
+import GHC.Generics (Generic)
 
 foreign import ccall "libutreexo.h"
     cForestPrint
@@ -128,16 +123,16 @@ parentMany position rise forestRows =
             (position `shiftR` rise .|. mask `shiftL` innerMask)
 
 getRootsReverse :: Word64 -> Int -> ([Word64], [Int])
-getRootsReverse leaves forestRows =
+getRootsReverse leavesCount forestRows =
   let
-    rows = [row | row <- [forestRows, forestRows - 1 .. 0], 1 `shiftL` row .&. leaves /= 0]
-    positionIncrements = inits $ map (\row -> 1 `shiftL` row) rows
+    rowsCountList = [row | row <- [forestRows, forestRows - 1 .. 0], 1 `shiftL` row .&. leavesCount /= 0]
+    positionIncrements = inits $ map (\row -> 1 `shiftL` row) rowsCountList
     positions = map sum positionIncrements
-    positionsAndRows = zip positions rows
+    positionsAndRows = zip positions rowsCountList
     mkRoot (position, row) = parentMany position row forestRows
     roots = map mkRoot positionsAndRows
   in
-    (reverse roots, reverse rows)
+    (reverse roots, reverse rowsCountList)
 
 tests :: TestTree
 tests = testGroup "parentMany/getRootsReverse tests"
@@ -229,9 +224,9 @@ printTree (Forest forestForeignPtr) = unsafePerformIO $ do
 data Forest = Forest (ForeignPtr CForest)
 
 cToHForest :: (Ptr CForest) -> [CLeaf] -> IO (Maybe Forest)
-cToHForest oldForestPtr [] = return Nothing
-cToHForest oldForestPtr leaves =
-    withArrayLen leaves $ \leavesLen leavesPtr -> do
+cToHForest _            [] = return Nothing
+cToHForest oldForestPtr leavesList =
+    withArrayLen leavesList $ \leavesLen leavesPtr -> do
         let cSize = intToCSize leavesLen
         forestPtr <- cForestAdd oldForestPtr leavesPtr cSize
         checkNull forestPtr
@@ -255,23 +250,23 @@ checkNull forestPtr =
             return $ Just $ Forest fp
 
 forestWithLeaves :: [CLeaf] -> Maybe Forest
-forestWithLeaves leaves =
+forestWithLeaves leavesCount =
     unsafePerformIO $
-        cToHForest nullPtr leaves
+        cToHForest nullPtr leavesCount
 
 addToForest :: Forest -> [CLeaf] -> Maybe Forest
 addToForest forest [] = Just forest
-addToForest (Forest forestForeignPtr) leaves =
+addToForest (Forest forestForeignPtr) leavesCount =
     unsafePerformIO $
         withForeignPtr forestForeignPtr $ \oldForestPtr ->
-            cToHForest oldForestPtr leaves
+            cToHForest oldForestPtr leavesCount
 
-prepareInsertion :: Forest -> CULong -> Maybe Forest
-prepareInsertion (Forest forestForeignPtr) delta =
-    unsafePerformIO $
-        withForeignPtr forestForeignPtr $ \forestPtr -> do
-            newPtr <- cForestPrepareInsertion forestPtr delta
-            checkNull newPtr
+--prepareInsertion :: Forest -> CULong -> Maybe Forest
+--prepareInsertion (Forest forestForeignPtr) delta =
+--    unsafePerformIO $
+--        withForeignPtr forestForeignPtr $ \forestPtr -> do
+--            newPtr <- cForestPrepareInsertion forestPtr delta
+--            checkNull newPtr
 
 swapNodes :: Forest -> CULong -> CULong -> CChar -> Maybe Forest
 swapNodes (Forest forestForeignPtr) from to row =
@@ -297,14 +292,15 @@ data HForest = HForest {
 } deriving (Eq, Show)
 
 instance IForest HForest where
+    itohforest = id
     ipositions = hpositions
     idata = hdata
     inumleaves = hnumleaves
     irows = hrows
 
 child :: CULong -> CChar -> Int
-child pos forestRowsChar =
-   word64ToInt $ childMany pos 1 forestRowsChar
+child position forestRowsChar =
+   word64ToInt $ childMany position 1 forestRowsChar
 
 childMany :: CULong -> CChar -> CChar -> Word64
 childMany position dropChar forestRowsChar =
@@ -337,8 +333,9 @@ firstTwelveBytes leaf =
     in byteSwapWord128 $ decode $ twelve <> padding
 
 instance Show CLeaf where
-    show (CLeaf first second) = "CLeaf { " ++ showHexWord128 (byteSwapWord128 first) ++ " " ++ showHexWord128 (byteSwapWord128 second) ++ " }"
+    show (CLeaf one two) = "CLeaf { " ++ showHexWord128 (byteSwapWord128 one) ++ " " ++ showHexWord128 (byteSwapWord128 two) ++ " }"
 
+swapTwo :: Int -> Int -> [a] -> [a]
 swapTwo f s xs = zipWith (\x y ->
     if x == f then xs !! s
     else if x == s then xs !! f
@@ -402,8 +399,8 @@ testLeaves = [CLeaf 0x10 0, CLeaf 0x20 0, CLeaf 0x30 0]
 testLeaves2 :: [CLeaf]
 testLeaves2 = [CLeaf 0x15 0, CLeaf 0x25 0, CLeaf 0x35 0]
 
-testLeaves3 :: [CLeaf]
-testLeaves3 = [CLeaf i 0 | i <- [1..100]]
+--testLeaves3 :: [CLeaf]
+--testLeaves3 = [CLeaf i 0 | i <- [1..100]]
 
 parent :: Word64 -> Int -> Word64
 parent position forestRows =
@@ -461,7 +458,7 @@ tests2 = testGroup "extractTwins tests"
   ]
 
 swapIfDescendant :: (Word64, Word64) -> (Word64, Word64) -> Int -> Int -> Int -> Word64
-swapIfDescendant (a_from, a_to) (b_from, b_to) ar br forestRows =
+swapIfDescendant (a_from, a_to) (_, b_to) ar br forestRows =
   let
       hdiff = ar - br
       bup = parentMany b_to hdiff forestRows
@@ -552,17 +549,41 @@ swapCollapses swaps collapses = snd $ flip runState collapses $ do
 tests5 :: TestTree
 tests5 = testGroup "swapCollapses tests"
   [
-    testCase "0" $ swapCollapses [[(5, 3), (17, 12)], [(41, 32)], [], [], []] [Nothing, Nothing, Just (48, 50), Just (57, 56), Nothing] @?= [Nothing, Nothing, Just (48, 48), Just (57, 56), Nothing]
-    , testCase "1" $ swapCollapses [[(7, 1), (12, 9)], [(20, 17)], [], []] [Nothing, Nothing, Just (24, 24), Nothing] @?= [Nothing, Nothing, Just (24, 24), Nothing]
-    , testCase "2" $ swapCollapses [[], [], [], [], [], []] [Nothing, Nothing, Nothing, Nothing, Nothing, Nothing] @?= [Nothing,Nothing,Nothing,Nothing,Nothing,Nothing]
-    , testCase "3" $ swapCollapses [[(13, 9), (18, 15), (24, 22), (28, 26), (36, 31)], [(72, 70), (79, 76)], [(102, 100)], [], [], []] [Nothing, Nothing, Nothing, Just (114, 114), Just (120, 120), Nothing] @?= [Nothing, Nothing, Nothing, Just (114, 114), Just (120, 120), Nothing]
+
+     testCase "0" $ swapCollapses [[(2,1),(9,4),(19,15),(26,25),(31,28),(42,32),(75,59),(84,79),(99,91)],[(135,129),(138,137),(142,141),(151,145),(161,153),(167,163),(176,168)],[(198,197),(212,208)],[(226,225),(232,229)],[],[],[]]
+                                  [Nothing,Nothing,Nothing,Just (235,230),Just (240,242),Just (249,248),Nothing] @?=
+                                  [Nothing,Nothing,Nothing,Just (235,226),Just (240,240),Just (249,248),Nothing]
+   , testCase "1" $ swapCollapses [[(5,2),(11,6),(26,19),(33,31),(36,35),(41,38),(48,42),(53,50),(58,57),(63,61),(71,67),(80,72),(92,85)],[(131,128),(140,136),(145,142),(149,146),(153,151),(156,154),(161,159),(164,163),(170,168),(176,172)],[(196,193),(201,198),(205,202),(209,206),(214,213)],[(227,225),(231,228)],[(242,241)],[],[]]
+                                  [Just (99,40),Nothing,Nothing,Just (234,228),Nothing,Just (248,248),Nothing] @?=
+                                  [Just (99,8),Nothing,Nothing,Just (234,226),Nothing,Just (248,248),Nothing]
+   , testCase "2" $ swapCollapses [[(2,1),(6,4),(18,10),(22,21),(27,24),(35,29),(39,36),(53,49),(60,59),(73,68),(91,74)],[(130,129),(138,134),(142,141),(152,147),(160,156),(165,163)],[(198,193),(206,200),(216,208)],[(232,229)],[(242,241)],[],[]]
+                                  [Nothing,Just (175,144),Nothing,Nothing,Nothing,Just (248,248),Nothing] @?=
+                                  [Nothing,Just (175,136),Nothing,Nothing,Nothing,Just (248,248),Nothing]
+   , testCase "3" $ swapCollapses [[(6,4),(11,9),(14,12),(20,18),(28,25),(32,30),(43,40),(58,46),(65,61),(69,66),(76,75),(88,83),(99,91)],[(132,131),(139,135),(143,141),(152,149),(158,155),(163,160),(167,164),(175,172)],[(195,192),(198,197),(208,204),(212,211)],[(226,225),(230,228)],[(242,241)],[],[]]
+                                  [Nothing,Nothing,Just (214,202),Just (233,228),Nothing,Just (248,248),Nothing] @?=
+                                  [Nothing,Nothing,Just (214,198),Just (233,226),Nothing,Just (248,248),Nothing]
+   , testCase "4" $ swapCollapses [[(35,28),(51,47)],[(152,145)],[(210,204)],[],[],[],[]]
+                                  [Just (76,94),Just (167,174),Just (216,214),Just (232,234),Just (245,244),Nothing,Nothing] @?=
+                                  [Just (76,76),Just (167,166),Just (216,210),Just (232,232),Just (245,244),Nothing,Nothing]
+   , testCase "5" $ swapCollapses [[(8,0),(17,15),(32,24),(47,45),(57,49),(69,67),(82,72),(96,91)],[(133,129),(140,134),(150,142),(161,156),(168,165)],[(195,193),(204,198),(210,207)],[(227,225)],[],[],[]]
+                                  [Nothing,Just (173,140),Nothing,Just (231,226),Just (240,240),Nothing,Nothing] @?=
+                                  [Nothing,Just (173,132),Nothing,Just (231,226),Just (240,240),Nothing,Nothing]
+   , testCase "6" $ swapCollapses [[(10,6),(25,19),(31,26),(48,35),(60,50),(75,71)],[(137,130),(145,140),(153,148),(163,158)],[(198,192),(207,203)],[(229,225)],[],[],[]]
+                                  [Just (82,18),Just (175,136),Nothing,Nothing,Just (240,240),Nothing,Nothing] @?=
+                                  [Just (82,4),Just (175,136),Nothing,Nothing,Just (240,240),Nothing,Nothing]
+   , testCase "7" $ swapCollapses [[(3,0),(9,7),(12,10),(16,15),(21,19),(30,23),(35,32),(46,41),(52,48),(61,59),(69,62),(78,77),(83,80),(86,85),(94,90),(99,96)],[(131,129),(135,132),(139,136),(142,141),(148,145),(155,151),(160,158),(165,162),(168,167),(174,171)],[(194,193),(198,197),(203,201),(209,205),(213,210)],[(226,225),(233,229)],[],[],[]]
+                                  [Nothing,Just (176,154),Just (214,204),Nothing,Just (240,242),Just (249,248),Nothing] @?=
+                                  [Nothing,Just (176,134),Just (214,194),Nothing,Just (240,240),Just (249,248),Nothing]
+   , testCase "8" $ swapCollapses [[(4,3),(21,10),(24,23),(33,26),(38,34),(47,43),(51,48),(58,52),(69,66),(74,73),(82,77),(90,84),(94,93)],[(139,128),(145,140),(150,147),(156,153),(163,159),(174,165)],[(196,193),(202,200),(208,206)],[(228,226)],[],[],[]]
+                                  [Nothing,Just (176,158),Just (213,206),Just (233,230),Just (243,242),Just (248,248),Nothing] @?=
+                                  [Nothing,Just (176,150),Just (213,202),Just (233,228),Just (243,242),Just (248,248),Nothing]
   ]
 
 rootPosition :: Word64 -> Int -> Int -> Word64
-rootPosition leaves h forestRows =
+rootPosition leavesCount h forestRows =
   let
     mask = 2 `shiftL` forestRows - 1
-    before = leaves .&. (mask `shiftL` (h + 1))
+    before = leavesCount .&. (mask `shiftL` (h + 1))
     shifted = (before `shiftR` h) .|. (mask `shiftL` (forestRows - (h - 1)))
   in
     shifted .&. mask
@@ -598,9 +619,10 @@ makeSwaps dels rootPresent rootPos =
             -- an odd length. (delRemains)
             then Just (oddLast, rootPos `xor` 1)
             else Nothing
+    convert _ = error "impossible because of argument 2 to chunksOf"
     pairs :: [(Word64, Word64)]
     pairs = catMaybes $ map convert $ chunksOf 2 dels
-    f (first, second) = (second `xor` 1, first)
+    f (one, two) = (two `xor` 1, one)
   in
     map f pairs
 
@@ -659,11 +681,12 @@ tests8 = testGroup "makeCollapse tests"
 makeSwapNextDels :: [Word64] -> Bool -> Int -> [Word64]
 makeSwapNextDels dels rootPresent forestRows =
   let
-    convert [x,y] = Just $ parent y forestRows
+    convert [_,y] = Just $ parent y forestRows
     convert (oddOne : []) =
       if not rootPresent
         then Just $ parent oddOne forestRows
         else Nothing
+    convert _ = error "impossible, chunksOf should limit the parameter to size 2"
   in
     catMaybes $ map convert $ chunksOf 2 dels
 
@@ -744,8 +767,8 @@ remTrans2 dels numLeaves forestRows =
   let
     (swaps, collapses) = remTransPre dels numLeaves forestRows
     newCollapses = swapCollapses swaps collapses
-    f (swap, (Just (from, to))) | from /= to = swap ++ [(from, to)]
-    f (swap, _) = swap
+    f (pair, (Just (from, to))) | from /= to = pair ++ [(from, to)]
+    f (pair, _) = pair
     newSwaps = map f (zip swaps newCollapses)
   in
     newSwaps
@@ -764,14 +787,14 @@ testsB = testGroup "remTrans2 tests"
   ]
 
 updateDirt :: [Word64] -> [(Word64, Word64)] -> Int -> Int -> [Word64]
-updateDirt hashDirt swapRow numLeaves rows =
+updateDirt hashDirt swapRow numLeaves rowsCount =
   let
     loop :: [Word64] -> [(Word64, Word64)] -> Word64 -> [Word64]
-    loop [] [] prevHash = []
+    loop [] [] _ = []
     loop readDirt readSwap prevHash =
-      let (popSwap, hashDest) = makeDestInRow (listToMaybe readSwap) (listToMaybe readDirt) rows
+      let (popSwap, hashDest) = makeDestInRow (listToMaybe readSwap) (listToMaybe readDirt) rowsCount
           leavesInt = intToWord64 numLeaves
-          skip = (not $ inForest hashDest leavesInt rows)
+          skip = (not $ inForest hashDest leavesInt rowsCount)
                   || hashDest == 0
                   || hashDest == prevHash
           newDest = if skip then prevHash else hashDest
@@ -787,36 +810,38 @@ updateDirt hashDirt swapRow numLeaves rows =
     loop deduped swapRow 0
 
 makeDestInRow :: Maybe (Word64, Word64) -> Maybe Word64 -> Int -> (Bool, Word64)
-makeDestInRow _              (Just firstDirt) rows =
-  (False, parent firstDirt rows)
-makeDestInRow (Just (_, to)) _          rows =
-  (True, parent to rows)
+makeDestInRow _              (Just firstDirt) rowsCount =
+  (False, parent firstDirt rowsCount)
+makeDestInRow (Just (_, to)) _                rowsCount =
+  (True, parent to rowsCount)
 makeDestInRow _ _ _ = error "both parameters empty"
 
 inForest :: Word64 -> Word64 -> Int -> Bool
-inForest pos numLeaves rows | pos < numLeaves = True
-inForest pos numLeaves rows =
-  let marker = 1 `shiftL` rows
+inForest position numLeaves _ | position < numLeaves = True
+inForest position numLeaves rowsNumber =
+  let marker = 1 `shiftL` rowsNumber
       mask = (marker `shiftL` 1) - 1
       newPos :: Word64
-      newPos = snd $ flip runState pos $ do
+      newPos = snd $ flip runState position $ do
                  whileM_ (do gotten<-State.get; return $ gotten .&. marker /= 0) $ do
                    gotten <- State.get
                    let newState = ((gotten `shiftL` 1) .&. mask) .|. 1
                    unless (newState /= gotten) $ error "state did not change"
                    State.put newState
   in
-      if pos < numLeaves
+      if position < numLeaves
           then True
-          else if pos >= mask
+          else if position >= mask
                    then False
                    else (newPos < numLeaves)
 
 
 
 
+dedupeSwapDirt :: Eq a1 => [a1] -> [(a2, a1)] -> [a1]
 dedupeSwapDirt hashDirt swapRow = [x | x <- hashDirt, not $ x `elem` map snd swapRow]
 
+testsD :: TestTree
 testsD = testGroup "inForest tests"
   [
       testCase "1" $ inForest 102 33 6 @?= True
@@ -986,9 +1011,9 @@ instance FromJSON Obj where
 
 testsHspec :: Spec
 testsHspec = do
-    a <- runIO $ eitherDecodeFileStrict' "updateDirt.json"
-    let Right (jsonRaw :: [([Word64], [Obj], Int, Int, [Word64])]) = a
-    forM_ (take 200 jsonRaw) $ \tupl@(a, b, c, d, e) ->
+    eitherTestCases <- runIO $ eitherDecodeFileStrict' "updateDirt.json"
+    let Right (jsonRaw :: [([Word64], [Obj], Int, Int, [Word64])]) = eitherTestCases
+    forM_ (take 200 jsonRaw) $ \(a, b, c, d, e) ->
       let
         tupls = [(objFrom o, objTo o) | o <- b]
       in
@@ -1047,18 +1072,31 @@ hhashRow forest dirt =
     in
         Just $ HForest oldpos written (inumleaves forest) (irows forest)
 
+intToCSize :: Int -> CSize
 intToCSize = fromInteger . toInteger
+intToWord64 :: Int -> Word64
 intToWord64 = fromInteger . toInteger
+ccharToInt :: CChar -> Int
 ccharToInt = fromInteger . toInteger
+ccharToInteger :: CChar -> Integer
 ccharToInteger = fromInteger . toInteger
+ccharToWord8 :: CChar -> Word8
 ccharToWord8 = fromInteger . toInteger
+word64ToWord128 :: Word64 -> Word128
 word64ToWord128 = fromInteger . toInteger
+word64ToInt :: Word64 -> Int
 word64ToInt = fromInteger . toInteger
+word64ToCULong :: Word64 -> CULong
 word64ToCULong = fromInteger . toInteger
+cuLongToWord64 :: CULong -> Word64
 cuLongToWord64 = fromInteger . toInteger
+cuLongToInt :: CULong -> Int
 cuLongToInt = fromInteger . toInteger
+word8ToInt :: Word8 -> Int
 word8ToInt = fromInteger . toInteger
+word8ToCChar :: Word8 -> CChar
 word8ToCChar = fromInteger . toInteger
+intToCULong :: Int -> CULong
 intToCULong = fromInteger . toInteger
 
 prop_hashRow :: Hedgehog.Property
@@ -1150,19 +1188,20 @@ testsE = testGroup "childMany tests" [
  ]
 
 detectRow :: Word64 -> Word8 -> Word8
-detectRow position rows =
+detectRow position rowsCount =
   let
     initialMarker :: Word64
-    initialMarker = 1 `shiftL` (word8ToInt rows)
+    initialMarker = 1 `shiftL` (word8ToInt rowsCount)
     (_, h) = snd $ flip runState (initialMarker, 0) $
-      whileM_ (do (marker, h) <- State.get
+      whileM_ (do (marker, _) <- State.get
                   return $ position .&. marker /= 0
               ) $ do
-        (marker, h) <- State.get
-        State.put (marker `shiftR` 1, h+1)
+        (marker, h2) <- State.get
+        State.put (marker `shiftR` 1, h2+1)
   in
     h
 
+testsF :: TestTree
 testsF = testGroup "detectRow tests" [
     testCase "0" $ detectRow 248 7 @?= 5
   , testCase "1" $ detectRow 180 7 @?= 1
@@ -1177,12 +1216,12 @@ hremove f dels =
       forM_ (zip [0..(irows f)-1] swapRows) $ \(r, row) -> do
         (gotten, dirt) <- State.get
         let hashDirt = updateDirt dirt row (word64ToInt $ inumleaves gotten) (ccharToInt $ irows gotten)
-        forM_ row $ \swap -> do
-          (gotten, dirt) <- State.get
-          let Just new = hswapNodes gotten (word64ToCULong $ fst swap) (word64ToCULong $ snd swap) r
-          State.put (new, dirt)
-        (gotten, _) <- State.get
-        let Just newf = hhashRow gotten (map word64ToCULong hashDirt)
+        forM_ row $ \pair -> do
+          (gotten2, dirt2) <- State.get
+          let Just new = hswapNodes gotten2 (word64ToCULong $ fst pair) (word64ToCULong $ snd pair) r
+          State.put (new, dirt2)
+        (gotten2, _) <- State.get
+        let Just newf = hhashRow gotten2 (map word64ToCULong hashDirt)
         State.put (newf, hashDirt)
     toRemove = fromList
         [(miniHash, ()) |
@@ -1198,7 +1237,9 @@ hremove f dels =
 prop_delete :: Hedgehog.Property
 prop_delete =
   Hedgehog.property $ do
-    let vals = Gen.set (Range.constantFrom 5 100 100) (Gen.word64 $ Range.constantFrom 0 (2 ^ 31) (2 ^ 32 -1))
+    let lower :: Word64 = 2 ^ (31 :: Integer)
+    let upper :: Word64 = 2 ^ (32 :: Integer) - 1
+    let vals = Gen.set (Range.constantFrom 5 100 100) (Gen.word64 $ Range.constantFrom lower lower upper)
     xs <- Hedgehog.forAll vals
 
     let mforest = forestWithLeaves [CLeaf (word64ToWord128 x) 0 | x <- Set.toList xs]
@@ -1247,22 +1288,23 @@ myUnfoldForest folder = map (myUnfoldTree folder)
 
 -- children of a GADT tree node
 chldr :: Lens' I (I, I)
-chldr = lens get set
+chldr = lens cget cset
     where
-        get (N _ a b) = (a, b)
-        get _ = error "only works on non-leaves"
-        set :: I -> (I, I) -> I
-        set (N k _ _) (a, b) = N k a b
-        set _ _ = error "only works on non-leaves"
+        cget (N _ a b) = (a, b)
+        cget _ = error "only works on non-leaves"
+        cset :: I -> (I, I) -> I
+        cset (N k _ _) (a, b) = N k a b
+        cset _ _ = error "only works on non-leaves"
 
 -- swap nodes of root
+zipTrans :: Zipper h j (T ()) -> Zipper (Zipper h j (T ())) Int (I, I)
 zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
 
--- sample zipper of Data.Tree. unused
-testDataTreeZipper = let
-    zipped = zipper (Data.Tree.Node "a" [])
-    transd :: Zipper (Zipper Top Int (Data.Tree.Tree [Char])) Int [Char] = zipped & fromWithin traverse & focus .~ "J"
-    in rezip transd
+---- sample zipper of Data.Tree. unused
+--testDataTreeZipper = let
+--    zipped = zipper (Data.Tree.Node "a" [])
+--    transd :: Zipper (Zipper Top Int (Data.Tree.Tree [Char])) Int [Char] = zipped & fromWithin traverse & focus .~ "J"
+--    in rezip transd
 
 -- swap children of root node using zipper
 transTree :: I -> I 
@@ -1286,9 +1328,9 @@ myTreeToDataTree t =
 toGADT :: IForest a => a -> [I]
 toGADT f =
     let
-        (rootPos, rootRows) = getRootsReverse (inumleaves f) (ccharToInt $ irows f)
+        (rootPositions, rootRows) = getRootsReverse (inumleaves f) (ccharToInt $ irows f)
     in
-        myUnfoldForest (genFun f) [(word64ToInt rootPos, rowsInThisTree) | (rootPos, rowsInThisTree) <- zip rootPos rootRows]
+        myUnfoldForest (genFun f) [(word64ToInt rootPos, rowsInThisTree) | (rootPos, rowsInThisTree) <- zip rootPositions rootRows]
 
 main :: IO ()
 main = do
