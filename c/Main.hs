@@ -9,6 +9,7 @@
 {-# LANGUAGE DeriveFoldable #-}
 
 import Prelude hiding (drop)
+import Debug.Trace
 
 import           Hedgehog ((===), annotateShow, annotate)
 import qualified Hedgehog
@@ -26,6 +27,7 @@ import Foreign.C (CSize(CSize), CULong(CULong), CChar(CChar))
 import Foreign.Marshal.Alloc (free)
 import Foreign.C.String (peekCString)
 
+import System.Environment (getArgs)
 import Test.Tasty hiding (after)
 import Test.Tasty.HUnit
 import Test.Tasty.Hspec (Spec, shouldBe, testSpec, runIO, it)
@@ -45,7 +47,16 @@ import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
 import Data.Bits
 import qualified Data.Set as Set
-import qualified Data.Tree (Tree, unfoldTree, drawForest)
+import qualified Data.Tree
+import qualified Data.Text as T
+
+import Diagrams.TwoD.Types (P2, unp2)
+import Diagrams.TwoD.Layout.Tree (BTree(Empty, BNode), leaf, uniqueXLayout)
+import Reanimate (reanimate, staticFrame, addStatic, mkBackground)
+import Reanimate.Animation(Animation)
+import Reanimate.Svg.Constructors
+import qualified Graphics.SvgTree.Types as SVGT
+import Data.Semigroup (Max(Max), Min(Min))
 
 import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>), Zipper) -- downward
 import Data.Tuple (swap)
@@ -327,8 +338,8 @@ instance Data.Binary.Binary Word128 where
           return $ Word128 { word128Hi64 = a1, word128Lo64 = a2 }
 
 firstTwelveBytes :: CLeaf -> Word128
-firstTwelveBytes leaf =
-    let twelve :: ByteString = BS.take 12 $ encode $ byteSwapWord128 $ first leaf
+firstTwelveBytes lea =
+    let twelve :: ByteString = BS.take 12 $ encode $ byteSwapWord128 $ first lea
         padding :: ByteString = BS.replicate 4 0
     in byteSwapWord128 $ decode $ twelve <> padding
 
@@ -345,21 +356,21 @@ hswapNodes :: IForest a => a -> CULong -> CULong -> CChar -> Maybe HForest
 hswapNodes goforest from to row =
     let
         posi = ipositions goforest
-        leaf = idata goforest
+        leavesData = idata goforest
         a = childMany from row (irows goforest)
         b = childMany to   row (irows goforest)
         tempmap = snd $ flip runState posi $ do
             let run = 1 `shiftL` (ccharToInt row)
             forM_ [0..run-1] $ \i -> do
-                let lA = leaf !! (word64ToInt $ a+i)
-                let lB = leaf !! (word64ToInt $ b+i)
+                let lA = leavesData !! (word64ToInt $ a+i)
+                let lB = leavesData !! (word64ToInt $ b+i)
                 let cA = firstTwelveBytes lA
                 let cB = firstTwelveBytes lB
                 (gotten :: Map Word128 Word64) <- State.get
                 State.put $ gotten & at cB .~ Just (a+i)
                                    & at cA .~ Just (b+i)
         newmap = tempmap
-        bottomup = snd $ flip runState (leaf, a, b) $ do
+        bottomup = snd $ flip runState (leavesData, a, b) $ do
             forM_ [0..row] $ \r -> do
                 (before, ia, ib) <- State.get
                 let run = 1 `shiftL` (ccharToInt $ row - r)
@@ -379,7 +390,7 @@ hswapNodes goforest from to row =
               let
                 f = cuLongToInt from
                 t = cuLongToInt to
-                row0leaf = swapTwo f t leaf
+                row0leaf = swapTwo f t leavesData
                 -- now data has been swapped, swap positions:
                 f2 = cuLongToWord64 from
                 t2 = cuLongToWord64 to
@@ -1257,8 +1268,7 @@ prop_delete =
     let our = hremove          forest dirtList
     toRecord ref === toRecord our
 
-data T a = N CLeaf (T a) (T a) | L deriving (Functor, Foldable, Traversable, Eq, Show)
-type I = T ()
+type I = BTree CLeaf
 
 -- node creation helper function for unfolders in the style of Data.Tree.unfoldTree
 genFun :: IForest a => a -> (Int, Int) -> (CLeaf, Maybe ((Int, Int), (Int, Int)))
@@ -1276,11 +1286,11 @@ genFun forest (idx, row) =
 myUnfoldTree :: ((Int, Int) -> (CLeaf, Maybe ((Int, Int), (Int, Int)))) -> (Int, Int) -> I
 myUnfoldTree folder root =
     let
-      (leaf, maybeChildren) = folder root
+      (lea, maybeChildren) = folder root
     in
       case maybeChildren of
-        Nothing -> N leaf L L
-        Just (leaf1, leaf2) -> N leaf (myUnfoldTree folder leaf1) (myUnfoldTree folder leaf2)
+        Nothing -> leaf lea
+        Just (leaf1, leaf2) -> BNode lea (myUnfoldTree folder leaf1) (myUnfoldTree folder leaf2)
 
 -- create GADT forest in the same way Data.Tree.unfoldForest works
 myUnfoldForest :: ((Int, Int) -> (CLeaf, Maybe ((Int, Int), (Int, Int)))) -> [(Int, Int)] -> [I]
@@ -1290,14 +1300,14 @@ myUnfoldForest folder = map (myUnfoldTree folder)
 chldr :: Lens' I (I, I)
 chldr = lens cget cset
     where
-        cget (N _ a b) = (a, b)
+        cget (BNode _ a b) = (a, b)
         cget _ = error "only works on non-leaves"
         cset :: I -> (I, I) -> I
-        cset (N k _ _) (a, b) = N k a b
+        cset (BNode k _ _) (a, b) = BNode k a b
         cset _ _ = error "only works on non-leaves"
 
 -- swap nodes of root
-zipTrans :: Zipper h j (T ()) -> Zipper (Zipper h j (T ())) Int (I, I)
+zipTrans :: Zipper h j I -> Zipper (Zipper h j I) Int (I, I)
 zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
 
 ---- sample zipper of Data.Tree. unused
@@ -1307,7 +1317,7 @@ zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
 --    in rezip transd
 
 -- swap children of root node using zipper
-transTree :: I -> I 
+transTree :: I -> I
 transTree f =
     let zipping :: Top :>> I = zipper f
         transd = zipTrans zipping
@@ -1315,10 +1325,10 @@ transTree f =
 
 -- convert GADT tree node to arguments for Data.Tree.unfoldTree
 binTreeToDataTree :: I -> (CLeaf, [I])
-binTreeToDataTree (N leaf L L) = (leaf, [])
-binTreeToDataTree (N leaf t1@(N _ _ _) t2@(N _ _ _)) = (leaf, [t1, t2])
-binTreeToDataTree (N _ _ _) = error "tree not perfect"
-binTreeToDataTree L = error "called on leaf"
+binTreeToDataTree (BNode cleaf Empty Empty) = (cleaf, [])
+binTreeToDataTree (BNode cleaf t1@(BNode _ _ _) t2@(BNode _ _ _)) = (cleaf, [t1, t2])
+binTreeToDataTree (BNode _ _ _) = error "tree not perfect"
+binTreeToDataTree Empty = error "called on leaf"
 
 -- convert GADT tree to Data.Tree for easier printing
 myTreeToDataTree :: I -> Data.Tree.Tree CLeaf
@@ -1331,6 +1341,57 @@ toGADT f =
         (rootPositions, rootRows) = getRootsReverse (inumleaves f) (ccharToInt $ irows f)
     in
         myUnfoldForest (genFun f) [(word64ToInt rootPos, rowsInThisTree) | (rootPos, rowsInThisTree) <- zip rootPositions rootRows]
+
+unitTests :: TestTree -> TestTree
+unitTests tree =
+        testGroup "all tests" [
+          tests,  tests2, tests3, tests4, tests5, tests6, tests7, tests8,
+          tests9, testsA, testsB, testsD, testsE, testsF, tree
+        ]
+
+cleafToText :: CLeaf -> T.Text
+cleafToText = T.pack . take 4 . showHexWord128 . byteSwapWord128 . first
+
+mkAnim :: [I] -> Animation
+mkAnim f =
+    let
+        layoutedTrees :: [Data.Tree.Tree (CLeaf, P2 Double)]
+        layoutedTrees = catMaybes $ map (uniqueXLayout 2 2) f
+        layoutTreeToSVGTree :: Data.Tree.Tree (CLeaf, P2 Double) -> (Double, [SVGT.Tree])
+        layoutTreeToSVGTree t =
+           let
+              flat :: [(CLeaf, P2 Double)]
+              flat = Data.Tree.flatten t
+              tToSVGElement :: (CLeaf, P2 Double) -> SVGT.Tree
+              tToSVGElement (lea, p2) =
+                trace (show (x,y)) $ translate (x/2) (-y-2) (scale 0.1 $ mkText $ cleafToText lea)
+                where
+                  (x,y) = unp2 p2
+              svgElems :: [SVGT.Tree]
+              svgElems = map tToSVGElement flat
+              yMinMax (_lea, p2) =
+                let
+                  (x, _) = unp2 p2
+                in
+                  Just (Min x, Max x)
+              Just (Min minX, Max maxX) = foldMap yMinMax flat
+           in
+              ((maxX - minX + 1), svgElems)
+        pairs = map layoutTreeToSVGTree layoutedTrees
+        unoffsettedSVGT = map snd pairs
+        doubles :: [Double]
+        doubles = map fst pairs
+        offsetsSeparated :: [[Double]]
+        offsetsSeparated = inits $ map fst pairs
+        offsets :: [Double]
+        offsets = map sum offsetsSeparated
+        zipped = zip offsets unoffsettedSVGT
+        offset :: (Double, [SVGT.Tree]) -> SVGT.Tree
+        offset (xOffsetToUse, svgElems) = translate (xOffsetToUse - 5) 0 $ mkGroup svgElems
+        svgT :: SVGT.Tree
+        svgT = mkGroup $ map offset zipped
+    in
+        addStatic (mkBackground "white") $ staticFrame 1 svgT
 
 main :: IO ()
 main = do
@@ -1350,17 +1411,18 @@ main = do
     --print $ f2 ^? (ix 1).chldr._1 == toGADT forest6 ^? (ix 1).chldr._1
     print $ f2 == toGADT forest6
 
-    let li = [  ("prop_swapNodes", prop_swapNodes)
-              , ("prop_iso", prop_iso)
-              , ("prop_hashRow", prop_hashRow)
-              , ("prop_delete", prop_delete)
-             ]
-    let group = Hedgehog.Group "example" li
-    _ <- Hedgehog.checkSequential group
+    args <- getArgs
+    if "--color" `elem` args then do
+      putStrLn "running test suite..."
+      let li = [  ("prop_swapNodes", prop_swapNodes)
+                , ("prop_iso", prop_iso)
+                , ("prop_hashRow", prop_hashRow)
+                , ("prop_delete", prop_delete)
+               ]
+      let group = Hedgehog.Group "example" li
+      _ <- Hedgehog.checkSequential group
 
-    tree <- testSpec "hspec tests" testsHspec
-    defaultMain $ testGroup "all tests" $
-        [
-          tests,  tests2, tests3, tests4, tests5, tests6, tests7, tests8,
-          tests9, testsA, testsB, testsD, testsE, testsF, tree
-        ]
+      tree <- testSpec "hspec tests" testsHspec
+      defaultMain (unitTests tree)
+    else
+      reanimate (mkAnim f2)
