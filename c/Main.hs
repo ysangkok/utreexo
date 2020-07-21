@@ -1379,8 +1379,6 @@ mkAnim f =
               ((maxX - minX + 1), svgElems)
         pairs = map layoutTreeToSVGTree layoutedTrees
         unoffsettedSVGT = map snd pairs
-        doubles :: [Double]
-        doubles = map fst pairs
         offsetsSeparated :: [[Double]]
         offsetsSeparated = inits $ map fst pairs
         offsets :: [Double]
