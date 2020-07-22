@@ -50,11 +50,13 @@ import qualified Data.Set as Set
 import qualified Data.Tree
 import qualified Data.Text as T
 
-import Diagrams.TwoD.Types (P2, unp2)
+import Diagrams.TwoD (scale)
+import Diagrams.TwoD.Types (P2, unp2, mkP2)
 import Diagrams.TwoD.Layout.Tree (BTree(Empty, BNode), leaf, uniqueXLayout)
-import Reanimate (reanimate, staticFrame, addStatic, mkBackground)
+import Reanimate (sceneAnimation, fromToS, tweenVar, reanimate, mkBackground, simpleVar, addStatic, translate)
+import qualified Reanimate
 import Reanimate.Animation(Animation)
-import Reanimate.Svg.Constructors
+import Reanimate.Svg.Constructors (mkText, mkGroup)
 import qualified Graphics.SvgTree.Types as SVGT
 import Data.Semigroup (Max(Max), Min(Min))
 
@@ -1364,7 +1366,7 @@ mkAnim f =
               flat = Data.Tree.flatten t
               tToSVGElement :: (CLeaf, P2 Double) -> SVGT.Tree
               tToSVGElement (lea, p2) =
-                trace (show (x,y)) $ translate (x/2) (-y-2) (scale 0.1 $ mkText $ cleafToText lea)
+                trace (show (x,y)) $ translate (x/2) (-y-2) (Reanimate.scale 0.1 $ mkText $ cleafToText lea)
                 where
                   (x,y) = unp2 p2
               svgElems :: [SVGT.Tree]
@@ -1386,10 +1388,19 @@ mkAnim f =
         zipped = zip offsets unoffsettedSVGT
         offset :: (Double, [SVGT.Tree]) -> SVGT.Tree
         offset (xOffsetToUse, svgElems) = translate (xOffsetToUse - 5) 0 $ mkGroup svgElems
-        svgT :: SVGT.Tree
-        svgT = mkGroup $ map offset zipped
+        svgT :: [SVGT.Tree]
+        svgT = map offset zipped
+        t1:t2:_ = svgT
+        tweenNodeInTree :: Double -> SVGT.Tree
+        tweenNodeInTree v = let
+            scaled = scale v (mkP2 (-3) 1)
+            (x,y) = unp2 scaled
+          in
+            mkGroup [t1, translate x y t2]
     in
-        addStatic (mkBackground "white") $ staticFrame 1 svgT
+        addStatic (mkBackground "white") $ sceneAnimation $
+          do v <- simpleVar tweenNodeInTree 0.0001
+             tweenVar v 1 $ \val -> fromToS val 1 -- from 0 to 1
 
 main :: IO ()
 main = do
