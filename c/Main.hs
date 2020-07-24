@@ -7,6 +7,9 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE DeriveAnyClass #-}
 
 import Prelude hiding (drop)
 import Debug.Trace
@@ -52,7 +55,7 @@ import qualified Data.Text as T
 
 import Diagrams.TwoD (scale)
 import Diagrams.TwoD.Types (P2, unp2, mkP2)
-import Diagrams.TwoD.Layout.Tree (BTree(Empty, BNode), leaf, uniqueXLayout)
+import Diagrams.TwoD.Layout.Tree (BTree(Empty, BNode), uniqueXLayout)
 import Reanimate (sceneAnimation, fromToS, tweenVar, reanimate, mkBackground, simpleVar, addStatic, translate)
 import qualified Reanimate
 import Reanimate.Animation(Animation)
@@ -60,9 +63,11 @@ import Reanimate.Svg.Constructors (mkText, mkGroup)
 import qualified Graphics.SvgTree.Types as SVGT
 import Data.Semigroup (Max(Max), Min(Min))
 
+import Control.Lens.Indexed (TraversableWithIndex(itraverse), FunctorWithIndex(imap), FoldableWithIndex(ifoldMap))
 import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>), Zipper) -- downward
 import Data.Tuple (swap)
 
+import Control.Applicative (liftA2)
 import Control.Monad.State.Lazy (runState, modify, lift, State)
 import qualified Control.Monad.State.Lazy as State (get, put)
 import Pipes.Prelude (toListM)
@@ -412,8 +417,8 @@ testLeaves = [CLeaf 0x10 0, CLeaf 0x20 0, CLeaf 0x30 0]
 testLeaves2 :: [CLeaf]
 testLeaves2 = [CLeaf 0x15 0, CLeaf 0x25 0, CLeaf 0x35 0]
 
---testLeaves3 :: [CLeaf]
---testLeaves3 = [CLeaf i 0 | i <- [1..100]]
+tree21 :: [CLeaf]
+tree21 = [CLeaf i 0 | i <- [1..15]]
 
 parent :: Word64 -> Int -> Word64
 parent position forestRows =
@@ -1272,31 +1277,31 @@ prop_delete =
 
 type I = BTree CLeaf
 
--- node creation helper function for unfolders in the style of Data.Tree.unfoldTree
-genFun :: IForest a => a -> (Int, Int) -> (CLeaf, Maybe ((Int, Int), (Int, Int)))
-genFun forest (idx, row) =
-  let
-    dat = idata forest
-    node = dat !! idx
-    firstChild = child (intToCULong idx) (irows forest)
-  in
-    if row == 0
-      then (node, Nothing) -- don't descend more once we reached height 0
-      else (node, Just ((firstChild, row - 1), (firstChild .|. 1, row - 1)))
 
 -- create GADT tree in the same way Data.Tree.unfoldTree works
-myUnfoldTree :: ((Int, Int) -> (CLeaf, Maybe ((Int, Int), (Int, Int)))) -> (Int, Int) -> I
-myUnfoldTree folder root =
+myUnfoldTree :: IForest a => a -> (Pos, Int) -> CBTree CLeaf
+myUnfoldTree a root =
     let
-      (lea, maybeChildren) = folder root
+      -- node creation helper function for unfolders in the style of Data.Tree.unfoldTree
+      folder :: (Pos, Int) -> (Pos, CLeaf, Maybe ((Pos, Int), (Pos, Int)))
+      folder (position@(Pos idx), row) =
+        let
+          dat = idata a
+          node = dat !! idx
+          firstChild = child (intToCULong idx) (irows a)
+        in
+          if row == 0
+            then (position, node, Nothing) -- don't descend more once we reached height 0
+            else (position, node, Just ((Pos $ firstChild, row - 1), ((Pos $ firstChild .|. 1), row - 1)))
+      (p, lea, maybeChildren) = folder root
     in
       case maybeChildren of
-        Nothing -> leaf lea
-        Just (leaf1, leaf2) -> BNode lea (myUnfoldTree folder leaf1) (myUnfoldTree folder leaf2)
+        Nothing -> (CBNode (Height $ ccharToInt $ irows a) p lea CBEmpty CBEmpty)
+        Just (leaf1, leaf2) -> CBNode (Height $ ccharToInt $ irows a) p lea (myUnfoldTree a leaf1) (myUnfoldTree a leaf2)
 
 -- create GADT forest in the same way Data.Tree.unfoldForest works
-myUnfoldForest :: ((Int, Int) -> (CLeaf, Maybe ((Int, Int), (Int, Int)))) -> [(Int, Int)] -> [I]
-myUnfoldForest folder = map (myUnfoldTree folder)
+myUnfoldForest :: IForest a => a -> [(Pos, Int)] -> [CBTree CLeaf]
+myUnfoldForest a = map (myUnfoldTree a)
 
 -- children of a GADT tree node
 chldr :: Lens' I (I, I)
@@ -1326,23 +1331,27 @@ transTree f =
     in rezip transd
 
 -- convert GADT tree node to arguments for Data.Tree.unfoldTree
-binTreeToDataTree :: I -> (CLeaf, [I])
+binTreeToDataTree :: BTree a -> (a, [BTree a])
 binTreeToDataTree (BNode cleaf Empty Empty) = (cleaf, [])
 binTreeToDataTree (BNode cleaf t1@(BNode _ _ _) t2@(BNode _ _ _)) = (cleaf, [t1, t2])
 binTreeToDataTree (BNode _ _ _) = error "tree not perfect"
 binTreeToDataTree Empty = error "called on leaf"
 
 -- convert GADT tree to Data.Tree for easier printing
-myTreeToDataTree :: I -> Data.Tree.Tree CLeaf
+myTreeToDataTree :: BTree a -> Data.Tree.Tree a
 myTreeToDataTree t =
     Data.Tree.unfoldTree binTreeToDataTree t
 
-toGADT :: IForest a => a -> [I]
-toGADT f =
+toGADT :: IForest a => a -> [BTree CLeaf]
+toGADT trees = map cbTreeToBTree (toCBTree trees)
+
+toCBTree :: IForest a => a -> [CBTree CLeaf]
+toCBTree f =
     let
         (rootPositions, rootRows) = getRootsReverse (inumleaves f) (ccharToInt $ irows f)
+        roots = [(Pos $ word64ToInt rootPos, rowsInThisTree) | (rootPos, rowsInThisTree) <- zip rootPositions rootRows]
     in
-        myUnfoldForest (genFun f) [(word64ToInt rootPos, rowsInThisTree) | (rootPos, rowsInThisTree) <- zip rootPositions rootRows]
+        myUnfoldForest f roots
 
 unitTests :: TestTree -> TestTree
 unitTests tree =
@@ -1402,6 +1411,31 @@ mkAnim f =
           do v <- simpleVar tweenNodeInTree 0.0001
              tweenVar v 1 $ \val -> fromToS val 1 -- from 0 to 1
 
+newtype Height = Height Int
+newtype Pos = Pos Int
+  deriving Show
+
+data CBTree a = CBNode Height Pos a (CBTree a) (CBTree a) | CBEmpty
+  deriving (Functor, Foldable, Traversable)
+
+deriving instance FunctorWithIndex Pos CBTree
+deriving instance FoldableWithIndex Pos CBTree
+instance TraversableWithIndex Pos CBTree where
+  itraverse :: forall f a b . Applicative f => (Pos -> a -> f b) -> CBTree a -> f (CBTree b)
+  itraverse fun (CBNode h p a left right) = let
+      l :: f (CBTree b)
+      l = itraverse fun left
+      r :: f (CBTree b)
+      r = itraverse fun right
+      n hei position el (lef, rig) = CBNode hei position el lef rig
+      in
+      liftA2 (n h p) (fun p a) (liftA2 (,) l r)
+  itraverse _ CBEmpty = pure CBEmpty
+
+cbTreeToBTree :: CBTree a -> BTree a
+cbTreeToBTree CBEmpty = Empty
+cbTreeToBTree (CBNode _ _ a left right) = BNode a (cbTreeToBTree left) (cbTreeToBTree right)
+
 main :: IO ()
 main = do
     let Just forest = forestWithLeaves testLeaves
@@ -1419,6 +1453,14 @@ main = do
 
     --print $ f2 ^? (ix 1).chldr._1 == toGADT forest6 ^? (ix 1).chldr._1
     print $ f2 == toGADT forest6
+
+    let Just forest21T0 = forestWithLeaves tree21
+    putStrLn "printTree (convert to Data.Tree and drawTree)"
+    _ <- forM_ (toCBTree forest21T0) $ \t -> do
+      let (x :: [Pos]) = ifoldMap (\i _ -> return i) t
+      print x
+      let im = imap (\i a -> show (i, a)) t
+      putStrLn $ Data.Tree.drawTree $ myTreeToDataTree $ cbTreeToBTree im
 
     args <- getArgs
     if "--color" `elem` args then do
