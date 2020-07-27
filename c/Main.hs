@@ -40,7 +40,7 @@ import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as BS
 import Data.Map (fromList, Map, difference)
 import Data.Function((&))
-import Control.Lens.Operators ((.~), (%~)) -- <&>
+import Control.Lens.Operators ((.~), (%~), (^.), (^?)) -- <&>
                         --     set   upd   view   list-view
 import Control.Lens.At (at, ix)
 import Control.Lens.Combinators (Lens', lens) -- both, _1
@@ -68,11 +68,12 @@ import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>), Zipper) -- 
 import Data.Tuple (swap)
 
 import Control.Applicative (liftA2)
-import Control.Monad.State.Lazy (runState, modify, lift, State)
+import Control.Monad.State.Lazy (evalState, execState, modify, lift, State)
 import qualified Control.Monad.State.Lazy as State (get, put)
 import Pipes.Prelude (toListM)
 import Pipes (yield, Producer)
 import Control.Monad (forM_, unless, mzero)
+import Control.Applicative (Alternative(..))
 import Control.Monad.Loops (whileM_)
 
 import Data.Aeson (eitherDecodeFileStrict', FromJSON(..), ToJSON(..), genericToJSON, genericParseJSON)
@@ -366,7 +367,7 @@ hswapNodes goforest from to row =
         leavesData = idata goforest
         a = childMany from row (irows goforest)
         b = childMany to   row (irows goforest)
-        tempmap = snd $ flip runState posi $ do
+        tempmap = flip execState posi $ do
             let run = 1 `shiftL` (ccharToInt row)
             forM_ [0..run-1] $ \i -> do
                 let lA = leavesData !! (word64ToInt $ a+i)
@@ -377,11 +378,11 @@ hswapNodes goforest from to row =
                 State.put $ gotten & at cB .~ Just (a+i)
                                    & at cA .~ Just (b+i)
         newmap = tempmap
-        bottomup = snd $ flip runState (leavesData, a, b) $ do
+        bottomup = flip execState (leavesData, a, b) $ do
             forM_ [0..row] $ \r -> do
                 (before, ia, ib) <- State.get
                 let run = 1 `shiftL` (ccharToInt $ row - r)
-                    after = snd $ flip runState before $
+                    after = flip execState before $
                             forM_ (zip [ia..ia+run-1] [ib..ib+run-1]) $ \(x, y) -> do
                                 ibefore <- State.get
                                 let intx = word64ToInt x
@@ -555,7 +556,7 @@ tests4 = testGroup "swapInRow tests"
   ]
 
 swapCollapses :: [[(Word64, Word64)]] -> [Maybe (Word64, Word64)] -> [Maybe (Word64, Word64)]
-swapCollapses swaps collapses = snd $ flip runState collapses $ do
+swapCollapses swaps collapses = flip execState collapses $ do
     forM_ [length collapses - 1, length collapses - 2 .. 1] $ \r -> do
       forM_ (swaps !! r) $ \s ->
         modify (\coll -> swapInRow s coll r) -- this would take forestRows
@@ -752,7 +753,7 @@ remTransPre dels numLeaves forestRows =
           let collapsed = makeCollapse newDels rootPresent row numLeaves nextNumLeaves forestRows
           let swaps = makeSwaps newDels rootPresent rootPos
           yield $ (swaps, collapsed)
-    both = fst $ runState (toListM producer) dels
+    both = evalState (toListM producer) dels
     padding1 = replicate (forestRows - length both) mzero
     padding2 = replicate (forestRows - length both) mzero
   in
@@ -840,7 +841,7 @@ inForest position numLeaves rowsNumber =
   let marker = 1 `shiftL` rowsNumber
       mask = (marker `shiftL` 1) - 1
       newPos :: Word64
-      newPos = snd $ flip runState position $ do
+      newPos = flip execState position $ do
                  whileM_ (do gotten<-State.get; return $ gotten .&. marker /= 0) $ do
                    gotten <- State.get
                    let newState = ((gotten `shiftL` 1) .&. mask) .|. 1
@@ -1082,7 +1083,7 @@ hhashRow forest dirt =
         culongToInt = fromInteger . toInteger
         intDirt :: [Int]
         intDirt = map culongToInt dirt
-        written = snd $ flip runState olddat $ do
+        written = flip execState olddat $ do
             forM_ (zip intDirt hashed) $ \(hp :: Int, result :: CLeaf) -> do
                 (gotten :: [CLeaf]) <- State.get
                 let new = gotten & ix hp .~ result
@@ -1210,7 +1211,7 @@ detectRow position rowsCount =
   let
     initialMarker :: Word64
     initialMarker = 1 `shiftL` (word8ToInt rowsCount)
-    (_, h) = snd $ flip runState (initialMarker, 0) $
+    (_, h) = flip execState (initialMarker, 0) $
       whileM_ (do (marker, _) <- State.get
                   return $ position .&. marker /= 0
               ) $ do
@@ -1230,7 +1231,7 @@ hremove f dels =
   let
     nextNumLeaves = inumleaves f - (intToWord64 $ length dels)
     swapRows = remTrans2 (map cuLongToWord64 dels) (inumleaves f) (ccharToInt $ irows f)
-    (mf, _) = snd $ flip runState (itohforest f, []) $
+    (mf, _) = flip execState (itohforest f, []) $
       forM_ (zip [0..(irows f)-1] swapRows) $ \(r, row) -> do
         (gotten, dirt) <- State.get
         let hashDirt = updateDirt dirt row (word64ToInt $ inumleaves gotten) (ccharToInt $ irows gotten)
@@ -1304,18 +1305,27 @@ myUnfoldForest :: IForest a => a -> [(Pos, Int)] -> [CBTree CLeaf]
 myUnfoldForest a = map (myUnfoldTree a)
 
 -- children of a GADT tree node
-chldr :: Lens' I (I, I)
+chldr :: Lens' (CBTree a) ((CBTree a), (CBTree a))
 chldr = lens cget cset
     where
-        cget (BNode _ a b) = (a, b)
+        cget (CBNode _ _ _ a b) = (a, b)
         cget _ = error "only works on non-leaves"
-        cset :: I -> (I, I) -> I
-        cset (BNode k _ _) (a, b) = BNode k a b
+        cset :: (CBTree a) -> (CBTree a, CBTree a) -> (CBTree a)
+        cset (CBNode h p v _ _) (a, b) = CBNode h p v a b
         cset _ _ = error "only works on non-leaves"
 
 -- swap nodes of root
-zipTrans :: Zipper h j I -> Zipper (Zipper h j I) Int (I, I)
+--zipTrans :: Zipper h j I -> Zipper (Zipper h j I) Int (I, I)
 zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
+
+p :: Show a => CBTree a ->  IO ()
+p = putStrLn . Data.Tree.drawTree . (fmap show) . myTreeToDataTree . cbTreeToBTree
+
+p2 :: (Show a) => Top :>> CBTree a -> IO ()
+p2 = p . rezip
+
+f21 = (toCBTree (fromMaybe (error "error t21") (forestWithLeaves tree21)))
+t = zipper (last f21)
 
 ---- sample zipper of Data.Tree. unused
 --testDataTreeZipper = let
@@ -1324,9 +1334,9 @@ zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
 --    in rezip transd
 
 -- swap children of root node using zipper
-transTree :: I -> I
+--transTree :: I -> I
 transTree f =
-    let zipping :: Top :>> I = zipper f
+    let zipping :: Top :>> CBTree CLeaf = zipper f
         transd = zipTrans zipping
     in rezip transd
 
@@ -1412,11 +1422,22 @@ mkAnim f =
              tweenVar v 1 $ \val -> fromToS val 1 -- from 0 to 1
 
 newtype Height = Height Int
+  deriving Eq
 newtype Pos = Pos Int
-  deriving Show
+  deriving (Show, Eq)
 
 data CBTree a = CBNode Height Pos a (CBTree a) (CBTree a) | CBEmpty
-  deriving (Functor, Foldable, Traversable)
+  deriving (Functor, Foldable, Traversable, Applicative, Alternative)
+
+instance Eq a => Eq (CBTree a) where
+  CBEmpty == CBEmpty = True
+  (CBNode _ _ _ _ _) == CBEmpty = False
+  CBEmpty == (CBNode _ _ _ _ _) = False
+  (CBNode h _ v l r) == (CBNode h2 _ v2 l2 r2) =
+    h == h2 &&
+    v == v2 &&
+    l == l2 &&
+    r == r2
 
 deriving instance FunctorWithIndex Pos CBTree
 deriving instance FoldableWithIndex Pos CBTree
@@ -1447,12 +1468,8 @@ main = do
     putStrLn $ printTree forest6
     --let Just forest5 = addToForest forest4 testLeaves3
     let f = toGADT forest3
-    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree f)
-    let f2 :: [I] = f & ix 1 %~ transTree
-    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree f2)
 
     --print $ f2 ^? (ix 1).chldr._1 == toGADT forest6 ^? (ix 1).chldr._1
-    print $ f2 == toGADT forest6
 
     let Just forest21T0 = forestWithLeaves tree21
     putStrLn "printTree (convert to Data.Tree and drawTree)"
@@ -1461,6 +1478,23 @@ main = do
       print x
       let im = imap (\i a -> show (i, a)) t
       putStrLn $ Data.Tree.drawTree $ myTreeToDataTree $ cbTreeToBTree im
+
+    let f2 :: [CBTree CLeaf] = (toCBTree forest3) & ix 1 %~ transTree
+    let Just t1 = f2 ^? (ix 1)
+    let dt = myTreeToDataTree $ cbTreeToBTree $ t1
+    putStrLn "Original Go forest"
+    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree f)
+    putStrLn "Go forest"
+    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree (toGADT forest6))
+    putStrLn "HS forest (original)"
+    let Just t0 = (toCBTree forest3) ^? (ix 1)
+    let dt0 = myTreeToDataTree $ cbTreeToBTree $ t0
+    putStrLn $ Data.Tree.drawTree (fmap show dt0)
+    putStrLn "HS forest (swapped)"
+    putStrLn $ Data.Tree.drawTree (fmap show dt)
+
+    -- TODO reindex. (==) defined to ignore position now, so it works.
+    print $ f2 == toCBTree forest6
 
     args <- getArgs
     if "--color" `elem` args then do
@@ -1476,4 +1510,4 @@ main = do
       tree <- testSpec "hspec tests" testsHspec
       defaultMain (unitTests tree)
     else
-      reanimate (mkAnim f2)
+      reanimate (mkAnim $ map cbTreeToBTree f2)
