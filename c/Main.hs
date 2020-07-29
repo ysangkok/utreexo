@@ -53,7 +53,7 @@ import Data.Word (Word64, Word8) -- byteSwap64
 import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
-import Data.Bits
+import Data.Bits ((.|.), (.&.), shiftL, shiftR, xor)
 import qualified Data.Set as Set
 import qualified Data.Tree
 import qualified Data.Text as T
@@ -61,7 +61,7 @@ import qualified Data.Text as T
 import Diagrams.TwoD (scale)
 import Diagrams.TwoD.Types (P2, unp2, mkP2)
 import Diagrams.TwoD.Layout.Tree (BTree(Empty, BNode), uniqueXLayout)
-import Reanimate (sceneAnimation, fromToS, tweenVar, reanimate, mkBackground, simpleVar, addStatic, translate)
+import Reanimate (sceneAnimation, fromToS, tweenVar, reanimate, mkBackground, simpleVar, addStatic, translate, rotate)
 import qualified Reanimate
 import Reanimate.Animation(Animation)
 import Reanimate.Svg.Constructors (mkText, mkGroup)
@@ -1393,7 +1393,7 @@ mkAnim f =
            let
               tToSVGElement :: (CLeaf, P2 Double) -> SVGT.Tree
               tToSVGElement (lea, p2) =
-                    translate x y (Reanimate.scale 0.1 $ mkText $ cleafToText lea <> T.pack (" " ++ show moved))
+                    translate x y $ Reanimate.scale 0.1 $ rotate 10 $ mkText (cleafToText lea <> T.pack (" " ++ show moved)) & SVGT.fontFamily .~ pure ["Ubuntu Mono"]
                   where
                     moved = case nodeToMoveAndHowFar of
                               Just (toMatch, xy) | toMatch == lea -> p2 + xy
