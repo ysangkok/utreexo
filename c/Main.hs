@@ -6,13 +6,16 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE DeriveAnyClass #-}
 
-import Prelude hiding (drop)
+import Prelude hiding (drop, lookup)
 import Debug.Trace
+import Data.Data (Data)
+import Data.Data.Lens (uniplate)
 
 import           Hedgehog ((===), annotateShow, annotate)
 import qualified Hedgehog
@@ -38,12 +41,14 @@ import Test.Tasty.Hspec (Spec, shouldBe, testSpec, runIO, it)
 import Data.Binary (Binary(put,get), encode, decode)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as BS
-import Data.Map (fromList, Map, difference)
+import Data.Map (fromList, Map, difference, lookup, unions, elems)
+import qualified Data.Map as Map
 import Data.Function((&))
 import Control.Lens.Operators ((.~), (%~), (^.), (^?)) -- <&>
                         --     set   upd   view   list-view
 import Control.Lens.At (at, ix)
 import Control.Lens.Combinators (Lens', lens) -- both, _1
+import Control.Lens.Plated
 import Data.Word (Word64, Word8) -- byteSwap64
 import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
@@ -61,7 +66,7 @@ import qualified Reanimate
 import Reanimate.Animation(Animation)
 import Reanimate.Svg.Constructors (mkText, mkGroup)
 import qualified Graphics.SvgTree.Types as SVGT
-import Data.Semigroup (Max(Max), Min(Min))
+import Data.Semigroup (Max(Max), Min(Min), Sum(Sum))
 
 import Control.Lens.Indexed (TraversableWithIndex(itraverse), FunctorWithIndex(imap), FoldableWithIndex(ifoldMap))
 import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>), Zipper) -- downward
@@ -353,6 +358,8 @@ firstTwelveBytes lea =
 
 instance Show CLeaf where
     show (CLeaf one two) = "CLeaf { " ++ showHexWord128 (byteSwapWord128 one) ++ " " ++ showHexWord128 (byteSwapWord128 two) ++ " }"
+
+deriving instance Data CLeaf
 
 swapTwo :: Int -> Int -> [a] -> [a]
 swapTwo f s xs = zipWith (\x y ->
@@ -1373,61 +1380,73 @@ unitTests tree =
 cleafToText :: CLeaf -> T.Text
 cleafToText = T.pack . take 4 . showHexWord128 . byteSwapWord128 . first
 
+nodeCoord :: P2 Double -> P2 Double
+nodeCoord p2 = mkP2 (x/2 - 5) (-y-2) where (x,y) = unp2 p2
+
 mkAnim :: [I] -> Animation
 mkAnim f =
     let
         layoutedTrees :: [Data.Tree.Tree (CLeaf, P2 Double)]
         layoutedTrees = catMaybes $ map (uniqueXLayout 2 2) f
-        layoutTreeToSVGTree :: Data.Tree.Tree (CLeaf, P2 Double) -> (Double, [SVGT.Tree])
-        layoutTreeToSVGTree t =
+        layoutTreeToSVGTree :: Maybe (CLeaf, P2 Double) -> Data.Tree.Tree (CLeaf, P2 Double) -> (Data.Tree.Tree (CLeaf, P2 Double, SVGT.Tree), Double)
+        layoutTreeToSVGTree nodeToMoveAndHowFar t =
            let
-              flat :: [(CLeaf, P2 Double)]
-              flat = Data.Tree.flatten t
               tToSVGElement :: (CLeaf, P2 Double) -> SVGT.Tree
               tToSVGElement (lea, p2) =
-                trace (show (x,y)) $ translate (x/2) (-y-2) (Reanimate.scale 0.1 $ mkText $ cleafToText lea)
-                where
-                  (x,y) = unp2 p2
-              svgElems :: [SVGT.Tree]
-              svgElems = map tToSVGElement flat
+                    translate x y (Reanimate.scale 0.1 $ mkText $ cleafToText lea <> T.pack (" " ++ show moved))
+                  where
+                    moved = case nodeToMoveAndHowFar of
+                              Just (toMatch, xy) | toMatch == lea -> p2 + xy
+                              _ -> p2
+                    (x,y) = unp2 $ nodeCoord moved
               yMinMax (_lea, p2) =
                 let
                   (x, _) = unp2 p2
                 in
                   Just (Min x, Max x)
-              Just (Min minX, Max maxX) = foldMap yMinMax flat
+              Just (Min minX, Max maxX) = foldMap yMinMax t
            in
-              ((maxX - minX + 1), svgElems)
-        pairs = map layoutTreeToSVGTree layoutedTrees
-        unoffsettedSVGT = map snd pairs
-        offsetsSeparated :: [[Double]]
-        offsetsSeparated = inits $ map fst pairs
+              (fmap (\(lea, p2) -> (lea, p2, tToSVGElement (lea, p2))) t
+              , maxX - minX + 1
+              )
+        (leafToPosSeparated, widths) = unzip $ map (layoutTreeToSVGTree Nothing) layoutedTrees
+        tr (lea, oldPos, _tree) = pure (lea, oldPos)
+        treesWithOffsets :: [(Data.Tree.Tree (CLeaf, P2 Double, SVGT.Tree), Double)]
+        treesWithOffsets = zip leafToPosSeparated offsets
+        treeToMap :: Data.Tree.Tree (CLeaf, P2 Double, SVGT.Tree) -> [(CLeaf, P2 Double)]
+        treeToMap = foldMap tr
+        eachTreeMoved :: [Map CLeaf (P2 Double)]
+        eachTreeMoved = map (Map.fromList.treeToMap.fst) treesWithOffsets
+        leafToPos :: Map CLeaf (P2 Double)
+        leafToPos = unions eachTreeMoved
         offsets :: [Double]
-        offsets = map sum offsetsSeparated
-        zipped = zip offsets unoffsettedSVGT
-        offset :: (Double, [SVGT.Tree]) -> SVGT.Tree
-        offset (xOffsetToUse, svgElems) = translate (xOffsetToUse - 5) 0 $ mkGroup svgElems
-        svgT :: [SVGT.Tree]
-        svgT = map offset zipped
-        t1:t2:_ = svgT
-        tweenNodeInTree :: Double -> SVGT.Tree
-        tweenNodeInTree v = let
-            scaled = scale v (mkP2 (-3) 1)
-            (x,y) = unp2 scaled
+        offsets = reverse $ tail $ reverse $ map sum $ inits widths
+        svgT :: (CLeaf, P2 Double) -> [[SVGT.Tree]]
+        svgT toMove = [translated
+                  | (xOffsetToUse, dict) <- zip offsets (fst $ unzip $ map (layoutTreeToSVGTree $ Just toMove) layoutedTrees)
+                  , let (svgElems :: [(CLeaf, P2 Double, SVGT.Tree)]) = foldMap pure dict
+                  , let move (_,_,x) = translate xOffsetToUse 0 x
+                  , let translated = fmap move svgElems]
+        tweenForest :: Double -> SVGT.Tree
+        tweenForest v = let
+            fromPos = fromMaybe (error "leaf not found") (lookup (CLeaf 0x10 0) leafToPos)
+            destPos = fromMaybe (error "leaf not found") (lookup (CLeaf 0x15 0) leafToPos)
+            scaled = scale v (destPos - fromPos)
           in
-            mkGroup [t1, translate x y t2]
+            mkGroup $ map mkGroup $ svgT ((CLeaf 0x10 0), scaled)
     in
         addStatic (mkBackground "white") $ sceneAnimation $
-          do v <- simpleVar tweenNodeInTree 0.0001
+          do v <- simpleVar tweenForest 0.0001
              tweenVar v 1 $ \val -> fromToS val 1 -- from 0 to 1
 
 newtype Height = Height Int
-  deriving Eq
+  deriving (Eq, Data)
 newtype Pos = Pos Int
-  deriving (Show, Eq)
+  deriving (Show, Eq, Data)
 
 data CBTree a = CBNode Height Pos a (CBTree a) (CBTree a) | CBEmpty
-  deriving (Functor, Foldable, Traversable, Applicative, Alternative)
+  deriving (Functor, Foldable, Traversable, Applicative, Alternative, Data)
+
 
 instance Eq a => Eq (CBTree a) where
   CBEmpty == CBEmpty = True
@@ -1459,6 +1478,9 @@ cbTreeToBTree (CBNode _ _ a left right) = BNode a (cbTreeToBTree left) (cbTreeTo
 
 main :: IO ()
 main = do
+    let mid = CLeaf (byteSwapWord128 0x3048a770d49f19ee8b5989862037a8fa) (byteSwapWord128 0xd3d7ec71b67ae11ca80aac6a9a2c3adb)
+    _ <- mapM (p . rewriteOf uniplate (\x -> case x of CBNode _ _ n _ _ | n == mid -> Just CBEmpty; _ -> Nothing)) f21
+
     let Just forest = forestWithLeaves testLeaves
     --let Just forest2 = prepareInsertion forest 12
     let Just forest3 = addToForest forest testLeaves2

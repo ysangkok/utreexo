@@ -14,7 +14,7 @@ import Control.Monad (ap)
 data CLeaf = CLeaf {
     first :: Word128
   , second :: Word128
-} deriving (Eq)
+} deriving (Eq, Ord)
 
 data CMiniPos = CMiniPos {
     mini :: Word128

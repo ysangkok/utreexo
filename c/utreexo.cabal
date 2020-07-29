@@ -39,4 +39,4 @@ executable utreexo
   extra-libraries: utreexo
   extra-lib-dirs: /home/janus/go/src/github.com/mit-dci/utreexo/c
   ghc-options: -Wall
-  ld-options: -fsanitize=address -Wl,-rpath,/home/janus/go/src/github.com/mit-dci/utreexo/c
+  ld-options: -Wl,-rpath,/home/janus/go/src/github.com/mit-dci/utreexo/c
