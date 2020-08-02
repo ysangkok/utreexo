@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface, DeriveGeneric, ScopedTypeVariables #-}
+{-# LANGUAGE ForeignFunctionInterface, ScopedTypeVariables #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -12,17 +12,19 @@
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE DeriveAnyClass #-}
 
-import Prelude hiding (drop, lookup)
-import Debug.Trace
+module Lib where
+
+import Diagrams.TwoD.Layout.Tree (BTree(Empty, BNode))
 import Data.Data (Data)
-import Data.Data.Lens (uniplate)
+
+import Prelude hiding (drop)
 
 import           Hedgehog ((===), annotateShow, annotate)
 import qualified Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 
-import Data.WideWord.Word128 (Word128(Word128), byteSwapWord128, word128Hi64, word128Lo64, showHexWord128)
+import Data.WideWord.Word128 (Word128(Word128), byteSwapWord128, word128Hi64, word128Lo64)
 
 import qualified Crypto.Hash.SHA256 as SHA256
 import System.IO.Unsafe (unsafePerformIO)
@@ -33,22 +35,18 @@ import Foreign.C (CSize(CSize), CULong(CULong), CChar(CChar))
 import Foreign.Marshal.Alloc (free)
 import Foreign.C.String (peekCString)
 
-import System.Environment (getArgs)
 import Test.Tasty hiding (after)
 import Test.Tasty.HUnit
-import Test.Tasty.Hspec (Spec, shouldBe, testSpec, runIO, it)
 
 import Data.Binary (Binary(put,get), encode, decode)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as BS
-import Data.Map (fromList, Map, difference, lookup, unions, elems)
-import qualified Data.Map as Map
+import Data.Map (fromList, Map, difference)
 import Data.Function((&))
-import Control.Lens.Operators ((.~), (%~), (^.), (^?)) -- <&>
+import Control.Lens.Operators ((.~), (%~)) -- <&>
                         --     set   upd   view   list-view
 import Control.Lens.At (at, ix)
 import Control.Lens.Combinators (Lens', lens) -- both, _1
-import Control.Lens.Plated
 import Data.Word (Word64, Word8) -- byteSwap64
 import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
@@ -56,19 +54,8 @@ import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR, xor)
 import qualified Data.Set as Set
 import qualified Data.Tree
-import qualified Data.Text as T
 
-import Diagrams.TwoD (scale)
-import Diagrams.TwoD.Types (P2, unp2, mkP2)
-import Diagrams.TwoD.Layout.Tree (BTree(Empty, BNode), uniqueXLayout)
-import Reanimate (sceneAnimation, fromToS, tweenVar, reanimate, mkBackground, simpleVar, addStatic, translate, rotate)
-import qualified Reanimate
-import Reanimate.Animation(Animation)
-import Reanimate.Svg.Constructors (mkText, mkGroup)
-import qualified Graphics.SvgTree.Types as SVGT
-import Data.Semigroup (Max(Max), Min(Min), Sum(Sum))
-
-import Control.Lens.Indexed (TraversableWithIndex(itraverse), FunctorWithIndex(imap), FoldableWithIndex(ifoldMap))
+import Control.Lens.Indexed (TraversableWithIndex(itraverse), FunctorWithIndex, FoldableWithIndex)
 import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>), Zipper) -- downward
 import Data.Tuple (swap)
 
@@ -81,9 +68,6 @@ import Control.Monad (forM_, unless, mzero)
 import Control.Applicative (Alternative(..))
 import Control.Monad.Loops (whileM_)
 
-import Data.Aeson (eitherDecodeFileStrict', FromJSON(..), ToJSON(..), genericToJSON, genericParseJSON)
-import Data.Aeson.Casing
-import GHC.Generics (Generic)
 
 foreign import ccall "libutreexo.h"
     cForestPrint
@@ -355,11 +339,6 @@ firstTwelveBytes lea =
     let twelve :: ByteString = BS.take 12 $ encode $ byteSwapWord128 $ first lea
         padding :: ByteString = BS.replicate 4 0
     in byteSwapWord128 $ decode $ twelve <> padding
-
-instance Show CLeaf where
-    show (CLeaf one two) = "CLeaf { " ++ showHexWord128 (byteSwapWord128 one) ++ " " ++ showHexWord128 (byteSwapWord128 two) ++ " }"
-
-deriving instance Data CLeaf
 
 swapTwo :: Int -> Int -> [a] -> [a]
 swapTwo f s xs = zipWith (\x y ->
@@ -1024,26 +1003,6 @@ testsD = testGroup "inForest tests"
     , testCase "looping" $ inForest 1023 431 9 @?= False
   ]
 
-data Obj = Obj {
-      objFrom :: Word64
-    , objTo :: Word64
-} deriving (Show, Generic)
-
-instance ToJSON Obj where
-   toJSON = genericToJSON $ aesonPrefix pascalCase
-instance FromJSON Obj where
-   parseJSON = genericParseJSON $ aesonPrefix pascalCase
-
-
-testsHspec :: Spec
-testsHspec = do
-    eitherTestCases <- runIO $ eitherDecodeFileStrict' "updateDirt.json"
-    let Right (jsonRaw :: [([Word64], [Obj], Int, Int, [Word64])]) = eitherTestCases
-    forM_ (take 200 jsonRaw) $ \(a, b, c, d, e) ->
-      let
-        tupls = [(objFrom o, objTo o) | o <- b]
-      in
-        it (show (a, tupls, c, d) ++ " matches reference " ++ show e) $ updateDirt a tupls c d `shouldBe` e
 
 prop_iso :: Hedgehog.Property
 prop_iso =
@@ -1331,7 +1290,9 @@ p = putStrLn . Data.Tree.drawTree . (fmap show) . myTreeToDataTree . cbTreeToBTr
 p2 :: (Show a) => Top :>> CBTree a -> IO ()
 p2 = p . rezip
 
+f21 :: [CBTree CLeaf]
 f21 = (toCBTree (fromMaybe (error "error t21") (forestWithLeaves tree21)))
+t :: Top :>> CBTree CLeaf
 t = zipper (last f21)
 
 ---- sample zipper of Data.Tree. unused
@@ -1342,6 +1303,7 @@ t = zipper (last f21)
 
 -- swap children of root node using zipper
 --transTree :: I -> I
+transTree :: CBTree CLeaf -> CBTree CLeaf
 transTree f =
     let zipping :: Top :>> CBTree CLeaf = zipper f
         transd = zipTrans zipping
@@ -1377,67 +1339,6 @@ unitTests tree =
           tests9, testsA, testsB, testsD, testsE, testsF, tree
         ]
 
-cleafToText :: CLeaf -> T.Text
-cleafToText = T.pack . take 4 . showHexWord128 . byteSwapWord128 . first
-
-nodeCoord :: P2 Double -> P2 Double
-nodeCoord p2 = mkP2 (x/2 - 5) (-y-2) where (x,y) = unp2 p2
-
-mkAnim :: [I] -> Animation
-mkAnim f =
-    let
-        layoutedTrees :: [Data.Tree.Tree (CLeaf, P2 Double)]
-        layoutedTrees = catMaybes $ map (uniqueXLayout 2 2) f
-        layoutTreeToSVGTree :: Maybe (CLeaf, P2 Double) -> Data.Tree.Tree (CLeaf, P2 Double) -> (Data.Tree.Tree (CLeaf, P2 Double, SVGT.Tree), Double)
-        layoutTreeToSVGTree nodeToMoveAndHowFar t =
-           let
-              tToSVGElement :: (CLeaf, P2 Double) -> SVGT.Tree
-              tToSVGElement (lea, p2) =
-                    translate x y $ Reanimate.scale 0.1 $ rotate 10 $ mkText (cleafToText lea <> T.pack (" " ++ show moved)) & SVGT.fontFamily .~ pure ["Ubuntu Mono"]
-                  where
-                    moved = case nodeToMoveAndHowFar of
-                              Just (toMatch, xy) | toMatch == lea -> p2 + xy
-                              _ -> p2
-                    (x,y) = unp2 $ nodeCoord moved
-              yMinMax (_lea, p2) =
-                let
-                  (x, _) = unp2 p2
-                in
-                  Just (Min x, Max x)
-              Just (Min minX, Max maxX) = foldMap yMinMax t
-           in
-              (fmap (\(lea, p2) -> (lea, p2, tToSVGElement (lea, p2))) t
-              , maxX - minX + 1
-              )
-        (leafToPosSeparated, widths) = unzip $ map (layoutTreeToSVGTree Nothing) layoutedTrees
-        tr (lea, oldPos, _tree) = pure (lea, oldPos)
-        treesWithOffsets :: [(Data.Tree.Tree (CLeaf, P2 Double, SVGT.Tree), Double)]
-        treesWithOffsets = zip leafToPosSeparated offsets
-        treeToMap :: Data.Tree.Tree (CLeaf, P2 Double, SVGT.Tree) -> [(CLeaf, P2 Double)]
-        treeToMap = foldMap tr
-        eachTreeMoved :: [Map CLeaf (P2 Double)]
-        eachTreeMoved = map (Map.fromList.treeToMap.fst) treesWithOffsets
-        leafToPos :: Map CLeaf (P2 Double)
-        leafToPos = unions eachTreeMoved
-        offsets :: [Double]
-        offsets = reverse $ tail $ reverse $ map sum $ inits widths
-        svgT :: (CLeaf, P2 Double) -> [[SVGT.Tree]]
-        svgT toMove = [translated
-                  | (xOffsetToUse, dict) <- zip offsets (fst $ unzip $ map (layoutTreeToSVGTree $ Just toMove) layoutedTrees)
-                  , let (svgElems :: [(CLeaf, P2 Double, SVGT.Tree)]) = foldMap pure dict
-                  , let move (_,_,x) = translate xOffsetToUse 0 x
-                  , let translated = fmap move svgElems]
-        tweenForest :: Double -> SVGT.Tree
-        tweenForest v = let
-            fromPos = fromMaybe (error "leaf not found") (lookup (CLeaf 0x10 0) leafToPos)
-            destPos = fromMaybe (error "leaf not found") (lookup (CLeaf 0x15 0) leafToPos)
-            scaled = scale v (destPos - fromPos)
-          in
-            mkGroup $ map mkGroup $ svgT ((CLeaf 0x10 0), scaled)
-    in
-        addStatic (mkBackground "white") $ sceneAnimation $
-          do v <- simpleVar tweenForest 0.0001
-             tweenVar v 1 $ \val -> fromToS val 1 -- from 0 to 1
 
 newtype Height = Height Int
   deriving (Eq, Data)
@@ -1445,7 +1346,7 @@ newtype Pos = Pos Int
   deriving (Show, Eq, Data)
 
 data CBTree a = CBNode Height Pos a (CBTree a) (CBTree a) | CBEmpty
-  deriving (Functor, Foldable, Traversable, Applicative, Alternative, Data)
+  deriving (Functor, Foldable, Traversable, Data)
 
 
 instance Eq a => Eq (CBTree a) where
@@ -1476,60 +1377,3 @@ cbTreeToBTree :: CBTree a -> BTree a
 cbTreeToBTree CBEmpty = Empty
 cbTreeToBTree (CBNode _ _ a left right) = BNode a (cbTreeToBTree left) (cbTreeToBTree right)
 
-main :: IO ()
-main = do
-    let mid = CLeaf (byteSwapWord128 0x3048a770d49f19ee8b5989862037a8fa) (byteSwapWord128 0xd3d7ec71b67ae11ca80aac6a9a2c3adb)
-    _ <- mapM (p . rewriteOf uniplate (\x -> case x of CBNode _ _ n _ _ | n == mid -> Just CBEmpty; _ -> Nothing)) f21
-
-    let Just forest = forestWithLeaves testLeaves
-    --let Just forest2 = prepareInsertion forest 12
-    let Just forest3 = addToForest forest testLeaves2
-    --let Just forest4 = deleteFromForest forest3 [0, 2, 4]
-    putStrLn $ printTree forest3
-    let Just forest6 = swapNodes forest3 8 9 1 -- swapping these two nodes on level 1 (just above leaves) will also swap the leaves
-    putStrLn $ printTree forest6
-    --let Just forest5 = addToForest forest4 testLeaves3
-    let f = toGADT forest3
-
-    --print $ f2 ^? (ix 1).chldr._1 == toGADT forest6 ^? (ix 1).chldr._1
-
-    let Just forest21T0 = forestWithLeaves tree21
-    putStrLn "printTree (convert to Data.Tree and drawTree)"
-    _ <- forM_ (toCBTree forest21T0) $ \t -> do
-      let (x :: [Pos]) = ifoldMap (\i _ -> return i) t
-      print x
-      let im = imap (\i a -> show (i, a)) t
-      putStrLn $ Data.Tree.drawTree $ myTreeToDataTree $ cbTreeToBTree im
-
-    let f2 :: [CBTree CLeaf] = (toCBTree forest3) & ix 1 %~ transTree
-    let Just t1 = f2 ^? (ix 1)
-    let dt = myTreeToDataTree $ cbTreeToBTree $ t1
-    putStrLn "Original Go forest"
-    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree f)
-    putStrLn "Go forest"
-    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree (toGADT forest6))
-    putStrLn "HS forest (original)"
-    let Just t0 = (toCBTree forest3) ^? (ix 1)
-    let dt0 = myTreeToDataTree $ cbTreeToBTree $ t0
-    putStrLn $ Data.Tree.drawTree (fmap show dt0)
-    putStrLn "HS forest (swapped)"
-    putStrLn $ Data.Tree.drawTree (fmap show dt)
-
-    -- TODO reindex. (==) defined to ignore position now, so it works.
-    print $ f2 == toCBTree forest6
-
-    args <- getArgs
-    if "--color" `elem` args then do
-      putStrLn "running test suite..."
-      let li = [  ("prop_swapNodes", prop_swapNodes)
-                , ("prop_iso", prop_iso)
-                , ("prop_hashRow", prop_hashRow)
-                , ("prop_delete", prop_delete)
-               ]
-      let group = Hedgehog.Group "example" li
-      _ <- Hedgehog.checkSequential group
-
-      tree <- testSpec "hspec tests" testsHspec
-      defaultMain (unitTests tree)
-    else
-      reanimate (mkAnim $ map cbTreeToBTree f2)

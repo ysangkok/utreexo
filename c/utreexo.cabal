@@ -6,9 +6,7 @@ author:              Janus Troelsen
 maintainer:          ysangkok@gmail.com
 build-type:          Simple
 
-executable utreexo
-  main-is:             Main.hs
-  other-modules:       Forest
+common libs
   build-depends:       base >=4.13 && <4.14
                      , wide-word
                      , tasty
@@ -40,3 +38,16 @@ executable utreexo
   extra-lib-dirs: /home/janus/go/src/github.com/mit-dci/utreexo/c
   ghc-options: -Wall
   ld-options: -Wl,-rpath,/home/janus/go/src/github.com/mit-dci/utreexo/c
+
+
+executable tests
+  import: libs
+  main-is:             Tests.hs
+  other-modules:       Forest
+                       Lib
+
+executable anim
+  import: libs
+  main-is:             Anim.hs
+  other-modules:       Forest
+                       Lib

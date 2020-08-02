@@ -1,20 +1,31 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE CPP                      #-}
+{-# LANGUAGE DeriveDataTypeable       #-}
 module Forest where
 
 import Foreign (Storable(..), poke, sizeOf, peek, alignment, Ptr)
 
 import Data.WideWord.Word128 (Word128)
 import Data.Word
+import Data.Data (Data)
+import qualified Data.Text as T
 
 import Control.Monad (ap)
+
+import Data.WideWord.Word128 (showHexWord128, byteSwapWord128)
 
 #include "libutreexo.h"
 
 data CLeaf = CLeaf {
     first :: Word128
   , second :: Word128
-} deriving (Eq, Ord)
+} deriving (Eq, Ord, Data)
+
+instance Show CLeaf where
+    show (CLeaf one two) = "CLeaf { " ++ showHexWord128 (byteSwapWord128 one) ++ " " ++ showHexWord128 (byteSwapWord128 two) ++ " }"
+
+cleafToText :: CLeaf -> T.Text
+cleafToText = T.pack . take 4 . showHexWord128 . byteSwapWord128 . first
 
 data CMiniPos = CMiniPos {
     mini :: Word128
