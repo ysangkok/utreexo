@@ -3,7 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 module Main where
 
-import Lib (forestWithLeaves, addToForest, testLeaves, toGADT, Pos, myTreeToDataTree, toCBTree, cbTreeToBTree, swapNodes, printTree, tree21, transTree, testLeaves2, updateDirt)
+import Lib (forestWithLeaves, addToForest, testLeaves, toDiagramsTree, Pos, myTreeToDataTree, toCBTree, cbTreeToBTree, swapNodes, printTree, tree21, transTree, testLeaves2, updateDirt)
 import UnitTests (unitTests)
 import PropertyTests (propertyTests)
 import Lib ( CBTree)
@@ -64,9 +64,9 @@ main = do
     let Just forest6 = swapNodes forest3 8 9 1 -- swapping these two nodes on level 1 (just above leaves) will also swap the leaves
     putStrLn $ printTree forest6
     --let Just forest5 = addToForest forest4 testLeaves3
-    let f = toGADT forest3
+    let f = toDiagramsTree forest3
 
-    --print $ f2 ^? (ix 1).chldr._1 == toGADT forest6 ^? (ix 1).chldr._1
+    --print $ f2 ^? (ix 1).chldr._1 == toDiagramsTree forest6 ^? (ix 1).chldr._1
 
     let Just forest21T0 = forestWithLeaves tree21
     putStrLn "printTree (convert to Data.Tree and drawTree)"
@@ -82,7 +82,7 @@ main = do
     putStrLn "Original Go forest"
     putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree f)
     putStrLn "Go forest"
-    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree (toGADT forest6))
+    putStrLn $ Data.Tree.drawForest (map (fmap show) $ map myTreeToDataTree (toDiagramsTree forest6))
     putStrLn "HS forest (original)"
     let Just t0 = (toCBTree forest3) ^? (ix 1)
     let dt0 = myTreeToDataTree $ cbTreeToBTree $ t0

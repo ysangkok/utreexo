@@ -756,8 +756,8 @@ myTreeToDataTree :: BTree a -> Data.Tree.Tree a
 myTreeToDataTree t =
     Data.Tree.unfoldTree binTreeToDataTree t
 
-toGADT :: IForest a => a -> [BTree CLeaf]
-toGADT trees = map cbTreeToBTree (toCBTree trees)
+toDiagramsTree :: IForest a => a -> [BTree CLeaf]
+toDiagramsTree trees = map cbTreeToBTree (toCBTree trees)
 
 toCBTree :: IForest a => a -> [CBTree CLeaf]
 toCBTree f =
@@ -781,6 +781,7 @@ instance Eq a => Eq (CBTree a) where
   (CBNode _ _ _ _ _) == CBEmpty = False
   CBEmpty == (CBNode _ _ _ _ _) = False
   (CBNode h _ v l r) == (CBNode h2 _ v2 l2 r2) =
+    -- CAUTION: ignoring position! so that we move nodes around without reindexing
     h == h2 &&
     v == v2 &&
     l == l2 &&
