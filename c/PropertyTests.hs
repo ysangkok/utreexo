@@ -14,9 +14,9 @@ import Data.Bits ((.|.), shiftL)
 import Data.Binary (encode, decode)
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
-import Data.WideWord.Word128 (Word128(Word128))
+import Data.WideWord.Word128 (Word128)
 import Data.Word (Word64, Word8)
-import Foreign.C (CSize(CSize), CULong(CULong), CChar(CChar))
+import Foreign.C (CULong)
 
 prop_iso :: Hedgehog.Property
 prop_iso =
@@ -124,6 +124,7 @@ prop_delete =
     toRecord ref === toRecord our
 
 
+li :: [(Hedgehog.PropertyName, Hedgehog.Property)]
 li = [  ("prop_swapNodes", prop_swapNodes)
       , ("prop_iso", prop_iso)
       , ("prop_hashRow", prop_hashRow)
@@ -131,4 +132,4 @@ li = [  ("prop_swapNodes", prop_swapNodes)
      ]
 
 propertyTests :: IO Bool
-propertyTests = Hedgehog.checkSequential $ Hedgehog.Group "example" li
+propertyTests = Hedgehog.checkSequential $ Hedgehog.Group "property tests" li

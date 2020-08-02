@@ -30,8 +30,6 @@ import Foreign.C (CSize(CSize), CULong(CULong), CChar(CChar))
 import Foreign.Marshal.Alloc (free)
 import Foreign.C.String (peekCString)
 
-import Test.Tasty hiding (after)
-
 import Data.Binary (Binary(put,get), encode, decode)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as BS
@@ -46,11 +44,10 @@ import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR, xor)
-import qualified Data.Set as Set
 import qualified Data.Tree
 
 import Control.Lens.Indexed (TraversableWithIndex(itraverse), FunctorWithIndex, FoldableWithIndex)
-import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>), Zipper) -- downward
+import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>)) -- downward
 import Data.Tuple (swap)
 
 import Control.Applicative (liftA2)
@@ -59,7 +56,6 @@ import qualified Control.Monad.State.Lazy as State (get, put)
 import Pipes.Prelude (toListM)
 import Pipes (yield, Producer)
 import Control.Monad (forM_, unless, mzero)
-import Control.Applicative (Alternative(..))
 import Control.Monad.Loops (whileM_)
 
 
@@ -331,14 +327,14 @@ hswapNodes goforest from to row =
         if row == 0
             then
               let
-                f = cuLongToInt from
-                t = cuLongToInt to
-                row0leaf = swapTwo f t leavesData
+                fromInt = cuLongToInt from
+                toInt = cuLongToInt to
+                row0leaf = swapTwo fromInt toInt leavesData
                 -- now data has been swapped, swap positions:
                 f2 = cuLongToWord64 from
                 t2 = cuLongToWord64 to
-                lA = row0leaf !! f
-                lB = row0leaf !! t
+                lA = row0leaf !! fromInt
+                lB = row0leaf !! toInt
                 row0map = posi   & at (firstTwelveBytes lA) .~ Just f2
                                  & at (firstTwelveBytes lB) .~ Just t2
               in Just $ HForest row0map row0leaf (inumleaves goforest) (irows goforest)
@@ -719,18 +715,19 @@ chldr = lens cget cset
 
 -- swap nodes of root
 --zipTrans :: Zipper h j I -> Zipper (Zipper h j I) Int (I, I)
-zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
 
-p :: Show a => CBTree a ->  IO ()
-p = putStrLn . Data.Tree.drawTree . (fmap show) . myTreeToDataTree . cbTreeToBTree
 
-p2 :: (Show a) => Top :>> CBTree a -> IO ()
-p2 = p . rezip
+printCB :: Show a => CBTree a ->  IO ()
+printCB = putStrLn . Data.Tree.drawTree . (fmap show) . myTreeToDataTree . cbTreeToBTree
+
+--p2 :: (Show a) => Top :>> CBTree a -> IO ()
+--p2 = p . rezip
 
 f21 :: [CBTree CLeaf]
 f21 = (toCBTree (fromMaybe (error "error t21") (forestWithLeaves tree21)))
-t :: Top :>> CBTree CLeaf
-t = zipper (last f21)
+
+--t :: Top :>> CBTree CLeaf
+--t = zipper (last f21)
 
 ---- sample zipper of Data.Tree. unused
 --testDataTreeZipper = let
@@ -743,6 +740,7 @@ t = zipper (last f21)
 transTree :: CBTree CLeaf -> CBTree CLeaf
 transTree f =
     let zipping :: Top :>> CBTree CLeaf = zipper f
+        zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
         transd = zipTrans zipping
     in rezip transd
 
