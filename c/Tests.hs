@@ -3,7 +3,8 @@
 {-# LANGUAGE DeriveGeneric #-}
 module Main where
 
-import Lib (forestWithLeaves, addToForest, testLeaves, toDiagramsTree, Pos, myTreeToDataTree, toCBTree, cbTreeToBTree, swapNodes, printTree, tree21, transTree, testLeaves2, updateDirt)
+import GoImplFunctions (forestWithLeaves, addToForest, swapNodes, printTree)
+import Lib (testLeaves, toDiagramsTree, Pos, myTreeToDataTree, toCBTree, cbTreeToBTree, tree21, transTree, testLeaves2, updateDirt)
 import UnitTests (unitTests)
 import PropertyTests (propertyTests)
 import Lib ( CBTree)

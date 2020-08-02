@@ -1,8 +1,5 @@
-{-# LANGUAGE ForeignFunctionInterface, ScopedTypeVariables #-}
-{-# LANGUAGE NumericUnderscores #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
@@ -22,13 +19,7 @@ import Prelude hiding (drop)
 import Data.WideWord.Word128 (Word128(Word128), byteSwapWord128, word128Hi64, word128Lo64)
 
 import qualified Crypto.Hash.SHA256 as SHA256
-import System.IO.Unsafe (unsafePerformIO)
 import Forest
-import Foreign.Ptr (nullPtr, FunPtr)
-import Foreign (Ptr, peek, withArrayLen, peekArray, ForeignPtr, newForeignPtr, withForeignPtr)
-import Foreign.C (CSize(CSize), CULong(CULong), CChar(CChar))
-import Foreign.Marshal.Alloc (free)
-import Foreign.C.String (peekCString)
 
 import Data.Binary (Binary(put,get), encode, decode)
 import Data.ByteString.Lazy (ByteString)
@@ -36,18 +27,18 @@ import qualified Data.ByteString.Lazy as BS
 import Data.Map (fromList, Map, difference)
 import Data.Function((&))
 import Control.Lens.Operators ((.~), (%~)) -- <&>
-                        --     set   upd   view   list-view
+                        --     set   upd
 import Control.Lens.At (at, ix)
-import Control.Lens.Combinators (Lens', lens) -- both, _1
-import Data.Word (Word64, Word8) -- byteSwap64
+import Control.Lens.Combinators (Lens', lens)
+import Data.Word (Word64, Word8)
 import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
-import Data.Maybe (fromMaybe, catMaybes, listToMaybe)
+import Data.Maybe (catMaybes, listToMaybe)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR, xor)
 import qualified Data.Tree
 
 import Control.Lens.Indexed (TraversableWithIndex(itraverse), FunctorWithIndex, FoldableWithIndex)
-import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>)) -- downward
+import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>))
 import Data.Tuple (swap)
 
 import Control.Applicative (liftA2)
@@ -58,49 +49,7 @@ import Pipes (yield, Producer)
 import Control.Monad (forM_, unless, mzero)
 import Control.Monad.Loops (whileM_)
 
-
-foreign import ccall "libutreexo.h"
-    cForestPrint
-    :: Ptr CForest
-    -> IO (Ptr CChar)
-
-foreign import ccall "libutreexo.h"
-    cForestAdd
-    :: Ptr CForest
-    -> Ptr CLeaf
-    -> CSize
-    -> IO (Ptr CForest) -- can be null!
-
-foreign import ccall "libutreexo.h"
-    cForestDelete
-    :: Ptr CForest
-    -> Ptr CULong
-    -> CSize
-    -> IO (Ptr CForest) -- can be null!
-
-foreign import ccall "libutreexo.h"
-    cForestPrepareInsertion
-    :: Ptr CForest
-    -> CULong
-    -> IO (Ptr CForest)
-
-foreign import ccall "libutreexo.h"
-    cForestSwapNodes
-    :: Ptr CForest
-    -> CULong
-    -> CULong
-    -> CChar
-    -> IO (Ptr CForest)
-
-foreign import ccall "libutreexo.h"
-    cForestHashRow
-    :: Ptr CForest
-    -> Ptr CULong
-    -> CSize
-    -> IO (Ptr CForest)
-
-foreign import ccall "libutreexo.h &cForestFree"
-  cForestFree :: FunPtr (Ptr CForest -> IO ())
+import Foreign.C (CSize, CULong, CChar)
 
 parentMany :: Word64 -> Int -> Int -> Word64
 parentMany position rise forestRows =
@@ -142,101 +91,6 @@ class IForest a where
 toRecord :: (IForest a) => Maybe a -> Maybe (Map Word128 Word64, [CLeaf], Word64)
 toRecord = fmap (\a -> (ipositions a, idata a, inumleaves a))
 
-instance IForest Forest where
-    itohforest a = HForest (ipositions a) (idata a) (inumleaves a) (irows a)
-    irows = rows
-    ipositions (Forest forestForeignPtr) =
-        let
-          miniposses =
-              unsafePerformIO $
-                  withForeignPtr forestForeignPtr $ \forestPtr -> do
-                      peeked_forest <- peek forestPtr
-                      let numpos = word64ToInt $ num_leaves peeked_forest
-                      peekArray numpos $ position_map peeked_forest
-        in
-          fromList [(mini x, pos x) | x <- miniposses] -- map (\(CMiniPos mini pos) -> CMiniPos (mini `shiftR` 32) pos) miniposses
-    idata (Forest forestForeignPtr) =
-        unsafePerformIO $
-            withForeignPtr forestForeignPtr $ \forestPtr -> do
-                peeked_forest <- peek forestPtr
-                let numleaves = word64ToInt $ leaves_size peeked_forest
-                peekArray numleaves $ leaves peeked_forest
-    inumleaves (Forest fptr) = unsafePerformIO $ do
-      withForeignPtr fptr $ \for -> do
-        f <- peek for
-        return $ num_leaves f
-
-printTree :: Forest -> String
-printTree (Forest forestForeignPtr) = unsafePerformIO $ do
-    withForeignPtr forestForeignPtr $ \forestPtr -> do
-        charPtr <- cForestPrint forestPtr
-        peeked_string <- peekCString charPtr
-        free charPtr
-        return $ peeked_string
-
-data Forest = Forest (ForeignPtr CForest)
-
-cToHForest :: (Ptr CForest) -> [CLeaf] -> IO (Maybe Forest)
-cToHForest _            [] = return Nothing
-cToHForest oldForestPtr leavesList =
-    withArrayLen leavesList $ \leavesLen leavesPtr -> do
-        let cSize = intToCSize leavesLen
-        forestPtr <- cForestAdd oldForestPtr leavesPtr cSize
-        checkNull forestPtr
-
-deleteFromForest :: Forest -> [CULong] -> Maybe Forest
-deleteFromForest forest [] = Just forest
-deleteFromForest (Forest forestForeignPtr) positions =
-    unsafePerformIO $
-        withForeignPtr forestForeignPtr $ \oldForestPtr ->
-            withArrayLen positions $ \positionsLen positionsPtr -> do
-                let cSize = intToCSize positionsLen
-                forestPtr <- cForestDelete oldForestPtr positionsPtr cSize
-                checkNull forestPtr
-
-checkNull :: Ptr CForest -> IO (Maybe Forest)
-checkNull forestPtr =
-    if forestPtr == nullPtr
-        then return Nothing
-        else do
-            fp <- newForeignPtr cForestFree forestPtr
-            return $ Just $ Forest fp
-
-forestWithLeaves :: [CLeaf] -> Maybe Forest
-forestWithLeaves leavesCount =
-    unsafePerformIO $
-        cToHForest nullPtr leavesCount
-
-addToForest :: Forest -> [CLeaf] -> Maybe Forest
-addToForest forest [] = Just forest
-addToForest (Forest forestForeignPtr) leavesCount =
-    unsafePerformIO $
-        withForeignPtr forestForeignPtr $ \oldForestPtr ->
-            cToHForest oldForestPtr leavesCount
-
---prepareInsertion :: Forest -> CULong -> Maybe Forest
---prepareInsertion (Forest forestForeignPtr) delta =
---    unsafePerformIO $
---        withForeignPtr forestForeignPtr $ \forestPtr -> do
---            newPtr <- cForestPrepareInsertion forestPtr delta
---            checkNull newPtr
-
-swapNodes :: Forest -> CULong -> CULong -> CChar -> Maybe Forest
-swapNodes (Forest forestForeignPtr) from to row =
-    unsafePerformIO $
-        withForeignPtr forestForeignPtr $ \forestPtr -> do
-            newPtr <- cForestSwapNodes forestPtr from to row
-            checkNull newPtr
-
-hashRow :: Forest -> [CULong] -> Maybe Forest
-hashRow (Forest ffptr) dirt =
-    unsafePerformIO $
-        withForeignPtr ffptr $ \fptr ->
-            withArrayLen dirt $ \len pptr -> do
-                let csizelen = intToCSize len
-                newPtr <- cForestHashRow fptr pptr csizelen
-                checkNull newPtr
-
 data HForest = HForest {
     hpositions :: Map Word128 Word64
   , hdata :: [CLeaf]
@@ -263,14 +117,6 @@ childMany position dropChar forestRowsChar =
     mask = (2 `shiftL` forestRows) - 1
   in
     cuLongToWord64 $ (position `shiftL` drop) .&. mask
-
-rows :: Forest -> CChar
-rows (Forest ptr) =
-    unsafePerformIO $ withForeignPtr ptr $ \x -> do
-        cforest <- peek x
-        let h = height cforest
-        let converted = word8ToCChar h
-        return converted
 
 instance Data.Binary.Binary Word128 where
   put (Word128 a64 b64) = put a64 <> put b64
@@ -722,9 +568,6 @@ printCB = putStrLn . Data.Tree.drawTree . (fmap show) . myTreeToDataTree . cbTre
 
 --p2 :: (Show a) => Top :>> CBTree a -> IO ()
 --p2 = p . rezip
-
-f21 :: [CBTree CLeaf]
-f21 = (toCBTree (fromMaybe (error "error t21") (forestWithLeaves tree21)))
 
 --t :: Top :>> CBTree CLeaf
 --t = zipper (last f21)

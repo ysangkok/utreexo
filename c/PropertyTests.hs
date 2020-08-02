@@ -5,6 +5,7 @@ module PropertyTests (propertyTests) where
 
 import Forest (CLeaf(CLeaf))
 import Lib
+import GoImplFunctions (forestWithLeaves, swapNodes, rows, printTree, hashRow, deleteFromForest)
 import           Hedgehog ((===), annotateShow, annotate)
 import qualified Hedgehog
 import qualified Hedgehog.Gen as Gen

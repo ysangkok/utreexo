@@ -1,5 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-import Lib (cbTreeToBTree, I, f21)
+import GoImplFunctions (f21)
+import Lib (cbTreeToBTree, I)
 import Forest (CLeaf(CLeaf), cleafToText)
 
 import Prelude hiding (lookup)

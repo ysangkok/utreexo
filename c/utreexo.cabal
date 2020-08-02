@@ -44,6 +44,7 @@ executable tests
   import: libs
   main-is:             Tests.hs
   other-modules:       Forest
+                       GoImplFunctions
                        Lib
                        UnitTests
                        PropertyTests
@@ -52,4 +53,5 @@ executable anim
   import: libs
   main-is:             Anim.hs
   other-modules:       Forest
+                       GoImplFunctions
                        Lib
