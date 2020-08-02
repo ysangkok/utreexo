@@ -3,20 +3,21 @@
 {-# LANGUAGE DeriveGeneric #-}
 module Main where
 
-import Lib (forestWithLeaves, addToForest, testLeaves, toGADT, Pos, unitTests, prop_swapNodes, prop_delete, prop_hashRow, prop_iso, myTreeToDataTree, toCBTree, cbTreeToBTree, swapNodes, printTree, tree21, transTree, testLeaves2, updateDirt)
+import Lib (forestWithLeaves, addToForest, testLeaves, toGADT, Pos, myTreeToDataTree, toCBTree, cbTreeToBTree, swapNodes, printTree, tree21, transTree, testLeaves2, updateDirt)
+import UnitTests (unitTests)
+import PropertyTests (propertyTests)
 import Lib ( CBTree)
 import Forest (CLeaf)
 --import Forest (CLeaf(CLeaf))
 
 import qualified Data.Tree
 --import Data.WideWord.Word128 (byteSwapWord128)
-import Control.Lens.Operators ((.~), (%~), (^.), (^?)) -- <&>
+import Control.Lens.Operators ((%~), (^?))
 import Control.Lens.At (ix)
 --import Control.Lens.Plated (rewriteOf)
 import Control.Monad (forM_)
-import Control.Lens.Indexed (TraversableWithIndex, FunctorWithIndex(imap), FoldableWithIndex(ifoldMap))
+import Control.Lens.Indexed (FunctorWithIndex(imap), FoldableWithIndex(ifoldMap))
 
-import qualified Hedgehog
 import Test.Tasty.Hspec (testSpec)
 import Test.Tasty (defaultMain)
 import Test.Tasty.Hspec (Spec, shouldBe, runIO, it)
@@ -93,13 +94,7 @@ main = do
     print $ f2 == toCBTree forest6
 
     putStrLn "running test suite..."
-    let li = [  ("prop_swapNodes", prop_swapNodes)
-              , ("prop_iso", prop_iso)
-              , ("prop_hashRow", prop_hashRow)
-              , ("prop_delete", prop_delete)
-             ]
-    let group = Hedgehog.Group "example" li
-    _ <- Hedgehog.checkSequential group
+    _ <- propertyTests
 
     tree <- testSpec "hspec tests" testsHspec
     defaultMain (unitTests tree)

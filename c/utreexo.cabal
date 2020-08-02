@@ -45,6 +45,8 @@ executable tests
   main-is:             Tests.hs
   other-modules:       Forest
                        Lib
+                       UnitTests
+                       PropertyTests
 
 executable anim
   import: libs
