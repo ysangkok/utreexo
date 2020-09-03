@@ -1,0 +1,37 @@
+diff --git a/c/Lib.hs b/c/Lib.hs
+index 395cfee..5b6696d 100644
+--- a/c/Lib.hs
++++ b/c/Lib.hs
+@@ -51,6 +51,8 @@ import Control.Monad.Loops (whileM_)
+ 
+ import Foreign.C (CSize, CULong, CChar)
+ 
++import Debug.Trace
++
+ parentMany :: Word64 -> Int -> Int -> Word64
+ parentMany position rise forestRows =
+         -- 18       6    2
+@@ -333,10 +335,15 @@ remTransPre dels numLeaves forestRows =
+                                               then (init readDels, False)
+                                               else (readDels, preRootPresent)
+           let (twinNextDels, newDels) = extractTwins gottenDels forestRows
++          traceShowM (gottenDels, twinNextDels, newDels)
+           let swapNextDels = makeSwapNextDels newDels rootPresent forestRows
++          traceShowM ("swapNextDels", newDels, rootPresent, swapNextDels)
+           lift $ State.put $ merge twinNextDels swapNextDels
+           let collapsed = makeCollapse newDels rootPresent row numLeaves nextNumLeaves forestRows
+           let swaps = makeSwaps newDels rootPresent rootPos
++          traceShowM ("makeSwaps", newDels, rootPresent, rootPos, swaps)
++          traceShowM ("makeCollapse", newDels, rootPresent, row, numLeaves, nextNumLeaves, forestRows, collapsed)
++          traceShowM ("swaps/collapse", swaps, collapsed)
+           yield $ (swaps, collapsed)
+     both = evalState (toListM producer) dels
+     padding1 = replicate (forestRows - length both) mzero
+@@ -503,6 +510,7 @@ hremove f dels =
+       forM_ (zip [0..(irows f)-1] swapRows) $ \(r, row) -> do
+         (gotten, dirt) <- State.get
+         let hashDirt = updateDirt dirt row (word64ToInt $ inumleaves gotten) (ccharToInt $ irows gotten)
++        traceShowM ("hashDirt", dirt, row, inumleaves gotten, irows gotten, hashDirt)
+         forM_ row $ \pair -> do
+           (gotten2, dirt2) <- State.get
+           let Just new = hswapNodes gotten2 (word64ToCULong $ fst pair) (word64ToCULong $ snd pair) r
