@@ -521,7 +521,6 @@ hremove f dels =
   in
     Just $ HForest cleaned (idata mf) nextNumLeaves (irows mf)
 
-type I = BTree CLeaf
 
 
 -- create GADT tree in the same way Data.Tree.unfoldTree works
@@ -648,3 +647,9 @@ cbTreeToBTree :: CBTree a -> BTree a
 cbTreeToBTree CBEmpty = Empty
 cbTreeToBTree (CBNode _ _ a left right) = BNode a (cbTreeToBTree left) (cbTreeToBTree right)
 
+inventiveBTreeToCBTree Empty = CBEmpty
+inventiveBTreeToCBTree (BNode a left right) = CBNode (Height 0) (Pos 0) a (inventiveBTreeToCBTree left) (inventiveBTreeToCBTree right)
+
+dataTreeToBTree (Data.Tree.Node a [l, r]) = BNode a (dataTreeToBTree l) (dataTreeToBTree r)
+dataTreeToBTree (Data.Tree.Node a []) = (BNode a Empty Empty)
+dataTreeToBTree _ = error "neither matched"
