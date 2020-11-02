@@ -1,24 +1,23 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 import GoImplFunctions (f21)
-import Lib (cbTreeToBTree, chldr, CBTree, inventiveBTreeToCBTree, dataTreeToBTree)
-import Forest (CLeaf(CLeaf), cleafToText)
+import Lib (cbTreeToBTree, CBTree)
+import Forest (CLeaf, cleafToText)
 
 import Prelude hiding (lookup)
 import Data.Maybe (fromMaybe, catMaybes)
 import qualified Data.Tree
 import qualified Data.Map as Map
-import qualified Data.Text as T
+--import qualified Data.Text as T
 import Data.Function((&))
-import Control.Lens (_Just)
+import Data.Tree.Lens (branches)
 import Control.Lens.Operators ((.~), (^?)) -- <&>
-import Control.Lens.Tuple
-import Control.Lens.At (at, ix)
+import Control.Lens.At (ix)
 import Data.List (inits)
 
 import Diagrams.TwoD (scale)
 import Diagrams.TwoD.Types (P2, unp2, mkP2)
 import Diagrams.TwoD.Layout.Tree (uniqueXLayout)
-import Reanimate (scene, fromToS, tweenVar, reanimate, mkBackground, simpleVar, addStatic, translate, rotate)
+import Reanimate (scene, fromToS, tweenVar, reanimate, mkBackground, simpleVar, addStatic, translate)
 import qualified Reanimate
 import Reanimate.Animation(Animation)
 import Reanimate.Svg.Constructors (mkText, mkGroup)
@@ -61,21 +60,24 @@ mkAnim f =
         leafToPos = Map.unions eachTreeMoved
         offsets :: [Double]
         offsets = reverse $ tail $ reverse $ map sum $ inits widths
-        svgT :: CLeaf -> P2 Double -> [SVGT.Tree]
-        svgT toMoveLeaf dest = [svgElem
+        svgT :: Data.Tree.Tree (CLeaf, P2 Double) -> P2 Double -> [SVGT.Tree]
+        svgT leavesWithCoords dest = let
+                onlyCLeaves :: [CLeaf]
+                onlyCLeaves = map fst $ Data.Tree.flatten leavesWithCoords
+              in
+                [svgElem
                   | (leaf, pos) <- Map.toList leafToPos
-                  , let newPos = if leaf == toMoveLeaf then pos+dest else pos
+                  , let newPos = if leaf `elem` onlyCLeaves then pos+dest else pos
                   , let svgElem = toSVGElement leaf newPos]
         tweenForest :: Double -> SVGT.Tree
         tweenForest v = let
-            cbTreeReconstruction = map (inventiveBTreeToCBTree . dataTreeToBTree) offsetTrees 
-            fromTree = fromMaybe (error "err1") $ cbTreeReconstruction ^? ix 2 . chldr . _2
-            destTree = fromMaybe (error "err2") $ cbTreeReconstruction ^? ix 3 . chldr . _1
-            (fromLeaf, fromPos) = head $ foldMap pure fromTree
+            fromTree = fromMaybe (error "err1") $ offsetTrees ^? ix 2 . branches . ix 1
+            destTree = fromMaybe (error "err2") $ offsetTrees ^? ix 3 . branches . ix 0 . branches . ix 1
+            (_,        fromPos) = head $ foldMap pure fromTree
             (_,        destPos) = head $ foldMap pure destTree
             scaled = scale v (destPos - fromPos)
           in
-            mkGroup $ svgT fromLeaf scaled
+            mkGroup $ svgT fromTree scaled
     in
         addStatic (mkBackground "white") $ scene $
           do v <- simpleVar tweenForest 0.0001
