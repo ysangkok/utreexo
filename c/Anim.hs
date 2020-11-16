@@ -14,7 +14,7 @@ import Data.Monoid (First)
 import Data.Semigroup.Foldable (foldMap1)
 import Data.Semigroup (Max(Max), Min(Min))
 import Data.List.NonEmpty (NonEmpty, fromList)
-import Data.Map (Map, lookup)
+import Data.Map (Map, lookup, fromList)
 import Prelude hiding (lookup)
 import Data.Word (Word64)
 import qualified Data.Text as T
@@ -69,19 +69,23 @@ oneWidth :: Tree (CLeaf, P2 Double) -> Double
 oneWidth t =
   let
     xs :: NonEmpty Double
-    xs = fromList $ t ^.. folded . _2 . _x -- bad because fromList is partial
+    xs = Data.List.NonEmpty.fromList $ t ^.. folded . _2 . _x -- bad because fromList is partial
     -- xs = toNonEmptyOf (folded1 . _2 . _x) t -- requires profunctor-optics (broken?)
     (Min minX, Max maxX) = foldMap1 (Min &&& Max) xs
   in
     maxX - minX + 5
 
--- Return a list of: 0 for left, 1 for right, descending down from the root
-goIdxToHaskellPath :: CChar -> Word64 -> Word64 -> [Word64]
-goIdxToHaskellPath forestRows rootPos goIdx = upPath
+-- The first tuple element if the index of the tree in the forest
+-- The second tuple element is  a list of: 0 for left, 1 for right, descending down from the root
+goIdxToHaskellPath :: CChar -> [Word64] -> Word64 -> (Int, [Word64])
+goIdxToHaskellPath forestRows rootPos goIdx = (treeIdx, tail upPath)
   where
+    Just treeIdx = lookup (head upPath) rootPosMap
+    rootPosMap = Data.Map.fromList (zip rootPos [0..])
     upPath = goDown goIdx
     goDown :: Word64 -> [Word64]
-    goDown idx | idx == rootPos = []
+    -- We put the root at the top, so we can look it up above with head
+    goDown idx | Just _ <- lookup idx rootPosMap = [idx]
     goDown idx = goDown (parent idx (ccharToInt forestRows)) ++ [idx .&. 1]
 
 -- Given a forest, find the given sub-tree and offset it by the given vector, and draw them all
@@ -90,14 +94,14 @@ svgT leavesCount forestRows xOffsetTrees leavesToAnimate dest positions =
   -- Generated Haskell path and Haskell path should be the same. But currently the generated path doesn't include the top tree index
   [ toSVGElement newPos (show (goIdx, generatedHaskellPath, haskellPath))
     | (
-        haskellPath@(treeIdx, _),
+        haskellPath,
         (leaf :: CLeaf, pos :: P2 Double, children :: Forest (CLeaf, P2 Double))
       ) <- withIndices
     , let newPos = if leaf `elem` leavesToAnimate
                      then pos+dest
                      else pos
     , let goIdx = alwaysIndex forestRows positions leaf children
-    , let generatedHaskellPath = goIdxToHaskellPath forestRows (treeRootPositions !! treeIdx) goIdx
+    , let generatedHaskellPath = goIdxToHaskellPath forestRows treeRootPositions goIdx
   ]
   where
     treeRootPositions = reverse $ fst $ getRootsReverse leavesCount (ccharToInt forestRows)
