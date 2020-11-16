@@ -91,7 +91,7 @@ goIdxToHaskellPath forestRows rootPos goIdx = (treeIdx, tail upPath)
 -- Given a forest, find the given sub-tree and offset it by the given vector, and draw them all
 svgT :: Word64 -> CChar -> Forest (CLeaf, P2 Double) -> Tree CLeaf -> P2 Double -> Map Word128 Word64 -> [SVGT.Tree]
 svgT leavesCount forestRows xOffsetTrees leavesToAnimate dest positions =
-  -- Generated Haskell path and Haskell path should be the same. But currently the generated path doesn't include the top tree index
+  -- Generated Haskell path and Haskell path should be the same.
   [ toSVGElement newPos (show (goIdx, generatedHaskellPath, haskellPath))
     | (
         haskellPath,
