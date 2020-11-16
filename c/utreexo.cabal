@@ -32,6 +32,8 @@ common libs
                      , diagrams-lib
                      , text
                      , semigroupoids
+                     , tree-diff
+                     , pretty
   default-language:    Haskell2010
   includes: libutreexo.h
   include-dirs: /home/janus/go/src/github.com/mit-dci/utreexo/c

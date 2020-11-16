@@ -2,7 +2,7 @@
 
 module GoImplFunctions where
 
-import Lib (IForest(idata, inumleaves, ipositions, irows, itohforest), toCBTree, CBTree, tree21, word64ToInt, word8ToCChar, intToCSize, HForest(HForest))
+import Lib (IForest(idata, inumleaves, ipositions, irows, itohforest), tree21, word64ToInt, word8ToCChar, intToCSize, HForest(HForest))
 import Forest (CLeaf, CForest, num_leaves, leaves, leaves_size, mini, pos, height, position_map)
 
 import Foreign.Ptr (nullPtr, FunPtr)
@@ -162,5 +162,5 @@ instance IForest Forest where
         f <- peek for
         return $ num_leaves f
 
-f21 :: [CBTree CLeaf]
-f21 = (toCBTree (fromMaybe (error "error t21") (forestWithLeaves tree21)))
+f21 :: Forest
+f21 = fromMaybe (error "error t21") (forestWithLeaves tree21)

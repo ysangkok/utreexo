@@ -8,13 +8,14 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Lib where
 
 import Diagrams.TwoD.Layout.Tree (BTree(Empty, BNode))
 import Data.Data (Data)
 
-import Prelude hiding (drop)
+import Prelude hiding (drop, lookup)
 
 import Data.WideWord.Word128 (Word128(Word128), byteSwapWord128, word128Hi64, word128Lo64)
 
@@ -24,12 +25,14 @@ import Forest
 import Data.Binary (Binary(put,get), encode, decode)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as BS
-import Data.Map (fromList, Map, difference)
+import Data.Map (fromList, Map, difference, lookup)
 import Data.Function((&))
-import Control.Lens.Operators ((.~), (%~)) -- <&>
+import Control.Lens.Operators ((.~), (%~), (^@..)) -- <&>
+import Control.Lens.Plated (rewriteOf, transformOf)
+import Data.Data.Lens (uniplate)
                         --     set   upd
 import Control.Lens.At (at, ix)
-import Control.Lens.Combinators (Lens', lens)
+import Control.Lens.Combinators (Lens', lens, itraversed, indices)
 import Data.Word (Word64, Word8)
 import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
@@ -453,6 +456,8 @@ hhashRow forest dirt =
     in
         Just $ HForest oldpos written (inumleaves forest) (irows forest)
 
+intToWord8 :: Int -> Word8
+intToWord8 = fromInteger . toInteger
 intToCSize :: Int -> CSize
 intToCSize = fromInteger . toInteger
 intToWord64 :: Int -> Word64
@@ -558,24 +563,8 @@ chldr = lens cget cset
         cset (CBNode h p v _ _) (a, b) = CBNode h p v a b
         cset _ _ = error "only works on non-leaves"
 
--- swap nodes of root
---zipTrans :: Zipper h j I -> Zipper (Zipper h j I) Int (I, I)
-
-
 printCB :: Show a => CBTree a ->  IO ()
-printCB = putStrLn . Data.Tree.drawTree . (fmap show) . myTreeToDataTree . cbTreeToBTree
-
---p2 :: (Show a) => Top :>> CBTree a -> IO ()
---p2 = p . rezip
-
---t :: Top :>> CBTree CLeaf
---t = zipper (last f21)
-
----- sample zipper of Data.Tree. unused
---testDataTreeZipper = let
---    zipped = zipper (Data.Tree.Node "a" [])
---    transd :: Zipper (Zipper Top Int (Data.Tree.Tree [Char])) Int [Char] = zipped & fromWithin traverse & focus .~ "J"
---    in rezip transd
+printCB = putStrLn . Data.Tree.drawTree . (fmap show) . cbTreeToDataTree
 
 -- swap children of root node using zipper
 --transTree :: I -> I
@@ -584,22 +573,52 @@ transTree f =
     let zipping :: Top :>> CBTree CLeaf = zipper f
         zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
         transd = zipTrans zipping
-    in rezip transd
+    in recalcPositions $ sortLeaves $ rezip transd
 
--- convert GADT tree node to arguments for Data.Tree.unfoldTree
-binTreeToDataTree :: BTree a -> (a, [BTree a])
-binTreeToDataTree (BNode cleaf Empty Empty) = (cleaf, [])
-binTreeToDataTree (BNode cleaf t1@(BNode _ _ _) t2@(BNode _ _ _)) = (cleaf, [t1, t2])
-binTreeToDataTree (BNode _ _ _) = error "tree not perfect"
-binTreeToDataTree Empty = error "called on leaf"
+isLeaf :: Height -> Pos -> Bool
+isLeaf (Height h) (Pos p) = detectRow (intToWord64 p) (intToWord8 h) == 0
 
--- convert GADT tree to Data.Tree for easier printing
-myTreeToDataTree :: BTree a -> Data.Tree.Tree a
-myTreeToDataTree t =
-    Data.Tree.unfoldTree binTreeToDataTree t
+-- Sort leaf positions, don't touch values
+sortLeaves :: forall a. (Data a, Ord a, Show a, Eq a) => CBTree a -> CBTree a
+sortLeaves CBEmpty = CBEmpty
+sortLeaves f@(CBNode h _ _ _ _) =
+    -- With partsOf you can only replace values. But we want to replace keys
+    -- f & partsOf (traverse.filtered (`elem` (map snd toSort)))
+    -- .~ sorted
+    transformOf uniplate (\org ->
+      case org of
+        CBNode leafHeight p v a b ->
+          case lookup p mapped of
+            Just newPos -> CBNode leafHeight newPos v a b
+            Nothing -> org
+        CBEmpty -> org
+    ) f
+  where
+    toSort :: [Pos]
+    toSort = map fst $ f ^@.. itraversed . indices (isLeaf h)
+    sorted :: [Pos]
+    sorted = sort toSort
+    mapped :: Map Pos Pos
+    mapped = fromList $ zip toSort sorted
 
-toDiagramsTree :: IForest a => a -> [BTree CLeaf]
-toDiagramsTree trees = map cbTreeToBTree (toCBTree trees)
+recalcPos :: Height -> Int -> Int -> Pos
+recalcPos (Height h) childA childB =
+  if parent (intToWord64 childA) h /= parent (intToWord64 childB) h 
+    then error $ "children do not have same parent: " ++ show (childA, childB)
+    else Pos (word64ToInt $ parent (intToWord64 childA) h)
+
+recalcPosInNode :: Data a => (CBTree a) -> Maybe (CBTree a)
+recalcPosInNode (CBNode hei posi val childA@(CBNode _ (Pos posChildA) _ _ _) childB@(CBNode _ (Pos posChildB) _ _ _)) =
+  let
+    newPos = recalcPos hei posChildA posChildB
+  in
+    if newPos == posi
+      then Nothing
+      else Just (CBNode hei newPos val childA childB)
+recalcPosInNode _ = Nothing
+
+recalcPositions :: Data a => CBTree a -> CBTree a
+recalcPositions = rewriteOf uniplate recalcPosInNode
 
 toCBTree :: IForest a => a -> [CBTree CLeaf]
 toCBTree f =
@@ -610,25 +629,15 @@ toCBTree f =
         myUnfoldForest f roots
 
 newtype Height = Height Int
-  deriving (Eq, Data)
-newtype Pos = Pos Int
   deriving (Show, Eq, Data)
+newtype Pos = Pos Int
+  deriving (Show, Eq, Data, Ord)
 
 data CBTree a = CBNode Height Pos a (CBTree a) (CBTree a) | CBEmpty
   deriving (Functor, Foldable, Traversable, Data)
 
 
-instance Eq a => Eq (CBTree a) where
-  CBEmpty == CBEmpty = True
-  (CBNode _ _ _ _ _) == CBEmpty = False
-  CBEmpty == (CBNode _ _ _ _ _) = False
-  (CBNode h _ v l r) == (CBNode h2 _ v2 l2 r2) =
-    -- CAUTION: ignoring position! so that we move nodes around without reindexing
-    h == h2 &&
-    v == v2 &&
-    l == l2 &&
-    r == r2
-
+deriving instance Eq a => Eq (CBTree a)
 deriving instance FunctorWithIndex Pos CBTree
 deriving instance FoldableWithIndex Pos CBTree
 instance TraversableWithIndex Pos CBTree where
@@ -646,3 +655,13 @@ instance TraversableWithIndex Pos CBTree where
 cbTreeToBTree :: CBTree a -> BTree a
 cbTreeToBTree CBEmpty = Empty
 cbTreeToBTree (CBNode _ _ a left right) = BNode a (cbTreeToBTree left) (cbTreeToBTree right)
+
+cbNodeToDataTree :: CBTree a -> ((Height, Pos, a), [CBTree a])
+cbNodeToDataTree (CBNode h p cleaf CBEmpty CBEmpty) = ((h, p, cleaf), [])
+cbNodeToDataTree (CBNode h p cleaf t1@(CBNode _ _ _ _ _) t2@(CBNode _ _ _ _ _)) = ((h, p, cleaf), [t1, t2])
+cbNodeToDataTree (CBNode _ _ _ _ _) = error "tree not perfect"
+cbNodeToDataTree CBEmpty = error "called on leaf"
+
+cbTreeToDataTree :: CBTree a -> Data.Tree.Tree (Height, Pos, a)
+cbTreeToDataTree t =
+    Data.Tree.unfoldTree cbNodeToDataTree t
