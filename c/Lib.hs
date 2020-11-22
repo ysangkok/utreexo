@@ -9,6 +9,7 @@
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Lib where
 
@@ -32,13 +33,14 @@ import Control.Lens.Plated (rewriteOf, transformOf)
 import Data.Data.Lens (uniplate)
                         --     set   upd
 import Control.Lens.At (at, ix)
-import Control.Lens.Combinators (Lens', lens, itraversed, indices)
+import Control.Lens.Combinators (Lens', Traversal', lens, itraversed, indices, unsafeSingular)
 import Data.Word (Word64, Word8)
 import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
-import Data.Maybe (catMaybes, listToMaybe)
+import Data.Maybe (catMaybes, listToMaybe, fromMaybe)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR, xor)
 import qualified Data.Tree
+import Data.Tree.Lens (branches)
 
 import Control.Lens.Indexed (TraversableWithIndex(itraverse), FunctorWithIndex, FoldableWithIndex)
 import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>))
@@ -665,3 +667,38 @@ cbNodeToDataTree CBEmpty = error "called on leaf"
 cbTreeToDataTree :: CBTree a -> Data.Tree.Tree (Height, Pos, a)
 cbTreeToDataTree t =
     Data.Tree.unfoldTree cbNodeToDataTree t
+
+type Path = (Int, [Word64])
+
+-- |The first tuple element if the index of the tree in the forest
+-- |The second tuple element is a list of: 0 for left, 1 for right, descending down from the root
+-- |This is the same kinda path you get if you used
+-- |(t :: Data.Tree.Forest) ^@.. itraversed <.> itraversed
+goIdxToHaskellPath :: CChar -> [Word64] -> Word64 -> Maybe Path
+goIdxToHaskellPath forestRows rootPos goIdx = do
+    upPath <- goDown goIdx 0
+    treeIdx <- lookup (head upPath) rootPosMap
+    return (treeIdx, tail upPath)
+  where
+    rootPosMap = fromList (zip rootPos [0..])
+    goDown :: Word64 -> CChar -> Maybe [Word64]
+    -- We put the root at the top, so we can look it up above with head
+    goDown idx _ | Just _ <- lookup idx rootPosMap = Just [idx]
+    goDown _   h | h == forestRows = Nothing -- idx was out of range since we have used our whole budget of rows but did not find a root yet
+    goDown idx h = do
+      untilHere <- goDown (parent idx (ccharToInt forestRows)) (h+1)
+      return $ untilHere ++ [idx .&. 1]
+
+delsToHsSwaps :: [Word64] -> Word64 -> CChar -> [[(Path, Path)]]
+delsToHsSwaps dels numLeaves forestRows =
+    (fmap.fmap) (\(x,y) -> (toP x, toP y)) (remTrans2 dels numLeaves (ccharToInt forestRows))
+  where
+    toP x = fromMaybe (error "goToHsPath failed!") $ goIdxToHaskellPath forestRows (reverse $ fst $ getRootsReverse numLeaves (ccharToInt forestRows)) x
+
+pathToLens :: Path -> Lens' (Data.Tree.Forest a) (Data.Tree.Tree a)
+pathToLens (rootIdx, bitsPath) =
+    unsafeSingular $ ix rootIdx . helper bitsPath
+  where
+    helper :: [Word64] -> Traversal' (Data.Tree.Tree a) (Data.Tree.Tree a)
+    helper (bit : rest) = branches . ix (word64ToInt bit) . helper rest
+    helper [] = id

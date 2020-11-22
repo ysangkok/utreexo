@@ -1,11 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 import qualified GoImplFunctions (f21, Forest)
-import Lib (cbTreeToBTree, toCBTree, ipositions, firstTwelveBytes, parent, irows, ccharToInt, getRootsReverse, inumleaves)
+import Lib (cbTreeToBTree, toCBTree, ipositions, firstTwelveBytes, parent, irows, ccharToInt, getRootsReverse, inumleaves, goIdxToHaskellPath)
 import Forest (CLeaf, cleafToText)
 
 import Foreign.C.Types
 
-import Data.Bits hiding (rotate)
 import Data.Maybe (fromMaybe, catMaybes)
 import Data.Tree (Forest, Tree(Node), rootLabel)
 import Data.Tree.Lens (branches)
@@ -14,7 +13,7 @@ import Data.Monoid (First)
 import Data.Semigroup.Foldable (foldMap1)
 import Data.Semigroup (Max(Max), Min(Min))
 import Data.List.NonEmpty (NonEmpty, fromList)
-import Data.Map (Map, lookup, fromList)
+import Data.Map (Map, lookup)
 import Prelude hiding (lookup)
 import Data.Word (Word64)
 import qualified Data.Text as T
@@ -75,19 +74,6 @@ oneWidth t =
   in
     maxX - minX + 5
 
--- The first tuple element if the index of the tree in the forest
--- The second tuple element is  a list of: 0 for left, 1 for right, descending down from the root
-goIdxToHaskellPath :: CChar -> [Word64] -> Word64 -> (Int, [Word64])
-goIdxToHaskellPath forestRows rootPos goIdx = (treeIdx, tail upPath)
-  where
-    Just treeIdx = lookup (head upPath) rootPosMap
-    rootPosMap = Data.Map.fromList (zip rootPos [0..])
-    upPath = goDown goIdx
-    goDown :: Word64 -> [Word64]
-    -- We put the root at the top, so we can look it up above with head
-    goDown idx | Just _ <- lookup idx rootPosMap = [idx]
-    goDown idx = goDown (parent idx (ccharToInt forestRows)) ++ [idx .&. 1]
-
 -- Given a forest, find the given sub-tree and offset it by the given vector, and draw them all
 svgT :: Word64 -> CChar -> Forest (CLeaf, P2 Double) -> Tree CLeaf -> P2 Double -> Map Word128 Word64 -> [SVGT.Tree]
 svgT leavesCount forestRows xOffsetTrees leavesToAnimate dest positions =
@@ -101,7 +87,7 @@ svgT leavesCount forestRows xOffsetTrees leavesToAnimate dest positions =
                      then pos+dest
                      else pos
     , let goIdx = alwaysIndex forestRows positions leaf children
-    , let generatedHaskellPath = goIdxToHaskellPath forestRows treeRootPositions goIdx
+    , let Just generatedHaskellPath = goIdxToHaskellPath forestRows treeRootPositions goIdx
   ]
   where
     treeRootPositions = reverse $ fst $ getRootsReverse leavesCount (ccharToInt forestRows)
