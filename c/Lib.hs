@@ -693,7 +693,7 @@ delsToHsSwaps :: [Word64] -> Word64 -> CChar -> [[(Path, Path)]]
 delsToHsSwaps dels numLeaves forestRows =
     (fmap.fmap) (\(x,y) -> (toP x, toP y)) (remTrans2 dels numLeaves (ccharToInt forestRows))
   where
-    toP x = fromMaybe (error "goToHsPath failed!") $ goIdxToHaskellPath forestRows (reverse $ fst $ getRootsReverse numLeaves (ccharToInt forestRows)) x
+    toP x = fromMaybe (error "goToHsPath failed!") $ goIdxToHaskellPath forestRows (fst $ getRootsReverse numLeaves (ccharToInt forestRows)) x
 
 pathToLens :: Path -> Lens' (Data.Tree.Forest a) (Data.Tree.Tree a)
 pathToLens (rootIdx, bitsPath) =

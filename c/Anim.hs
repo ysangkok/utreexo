@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 import qualified GoImplFunctions (f21, Forest)
-import Lib (cbTreeToBTree, toCBTree, ipositions, firstTwelveBytes, parent, irows, ccharToInt, getRootsReverse, inumleaves, goIdxToHaskellPath)
+import Lib (cbTreeToBTree, toCBTree, ipositions, firstTwelveBytes, parent, irows, ccharToInt, getRootsReverse, inumleaves, goIdxToHaskellPath, Path, pathToLens, delsToHsSwaps)
 import Forest (CLeaf, cleafToText)
 
 import Foreign.C.Types
@@ -19,7 +19,7 @@ import Data.Word (Word64)
 import qualified Data.Text as T
 import Data.WideWord.Word128 (Word128)
 
-import Control.Lens.Operators ((.~), (^?), (^..), (%~), (^@..), (<.>))
+import Control.Lens.Operators ((.~), (^?), (^..), (%~), (^@..), (<.>), (^.))
 import Control.Lens.At (ix)
 import Control.Lens (each, _2, folded, Getting, itraversed)
 import Control.Arrow ((&&&))
@@ -106,7 +106,7 @@ mkAnim :: GoImplFunctions.Forest -> Animation
 mkAnim f =
   let
     layoutedTrees :: Forest (CLeaf, P2 Double)
-    layoutedTrees = reverse $ catMaybes $ map (uniqueXLayout 2 2 . cbTreeToBTree) (toCBTree f)
+    layoutedTrees = catMaybes $ map (uniqueXLayout 2 2 . cbTreeToBTree) (toCBTree f)
 
     -- Widths from left to right
     widths = map oneWidth layoutedTrees
@@ -120,33 +120,33 @@ mkAnim f =
     xOffsetTrees :: Forest (CLeaf, P2 Double)
     xOffsetTrees = zip layoutedTrees xOffsets & each %~ treeAndOffsetToOffsetTree
 
-    fromLens :: Getting (First (Tree a)) (Forest a) (Tree a)
-    fromLens = ix 1 . branches . ix 1
+    --fromLens :: Getting (First (Tree a)) (Forest a) (Tree a)
+    --fromLens = ix 1 . branches . ix 1
 
-    destLens :: Getting (First (Tree a)) (Forest a) (Tree a)
-    destLens = ix 0 . branches . ix 0 . branches . ix 1
+    --destLens :: Getting (First (Tree a)) (Forest a) (Tree a)
+    --destLens = ix 0 . branches . ix 0 . branches . ix 1
 
-    fromTree = fromMaybe (error "tree to move not found")            $ xOffsetTrees ^? fromLens 
-    destTree = fromMaybe (error "tree getting moved onto not found") $ xOffsetTrees ^? destLens
-    (_, fromPos) = rootLabel fromTree
-    (_, destPos) = rootLabel destTree
-
-    -- `fraction` is the progress of the nodes to move:
-    --    0 means they should be unmoved (still at fromPos)
-    --    1 means they should be moved all the way to to destPos
-    tweenForest :: Double -> SVGT.Tree
-    tweenForest fraction =
-      let
-        scaled = scale fraction (destPos - fromPos)
-        onlyCLeaves = fmap fst fromTree
-      in
-        mkGroup $ svgT (inumleaves f) (irows f) xOffsetTrees onlyCLeaves scaled (ipositions f)
   in
     scene (
-      do v <- simpleVar tweenForest 0.0001
-         let duration = 1 :: Duration
-         -- Without flip, the tween would go 1->0. But we want 0->1.
-         tweenVar v duration (flip fromToS 1)
+      flip traverse (delsToHsSwaps [4..9] 15 4 ^.. traverse.traverse) $ \(from :: Path, dest :: Path) -> do
+        let
+          fromTree = xOffsetTrees ^. pathToLens from
+          (Node (_, fromPos :: P2 Double) _) = fromTree
+          (Node (_, destPos :: P2 Double) _) = xOffsetTrees ^. pathToLens dest
+          onlyCLeaves = fmap fst fromTree
+          -- `fraction` is the progress of the nodes to move:
+          --    0 means they should be unmoved (still at fromPos)
+          --    1 means they should be moved all the way to to destPos
+          tweenForest :: Double -> SVGT.Tree
+          tweenForest fraction =
+            let
+              scaled = scale fraction (destPos - fromPos)
+            in
+              mkGroup $ svgT (inumleaves f) (irows f) xOffsetTrees onlyCLeaves scaled (ipositions f)
+        v <- simpleVar tweenForest 0.0001
+        let duration = 1 :: Duration
+        -- Without flip, the tween would go 1->0. But we want 0->1.
+        tweenVar v duration (flip fromToS 1)
     )
       & addStatic (mkBackground "white")
       & pauseAtEnd 0.5
