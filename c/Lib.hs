@@ -41,6 +41,9 @@ import Data.Maybe (catMaybes, listToMaybe, fromMaybe)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR, xor)
 import qualified Data.Tree
 import Data.Tree.Lens (branches)
+import Data.TreeDiff.Tree (treeDiff, EditTree(EditNode), Edit(Swp, Ins, Cpy, Del))
+import Text.PrettyPrint (render)
+import qualified Text.PrettyPrint as PP
 
 import Control.Lens.Indexed (TraversableWithIndex(itraverse), FunctorWithIndex, FoldableWithIndex)
 import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>))
@@ -689,9 +692,9 @@ goIdxToHaskellPath forestRows rootPos goIdx = do
       untilHere <- goDown (parent idx (ccharToInt forestRows)) (h+1)
       return $ untilHere ++ [idx .&. 1]
 
-delsToHsSwaps :: [Word64] -> Word64 -> CChar -> [[(Path, Path)]]
+delsToHsSwaps :: [Word64] -> Word64 -> CChar -> [[(Word64, Path, Path, Word64)]]
 delsToHsSwaps dels numLeaves forestRows =
-    (fmap.fmap) (\(x,y) -> (toP x, toP y)) (remTrans2 dels numLeaves (ccharToInt forestRows))
+    (fmap.fmap) (\(x,y) -> (x, toP x, toP y, y)) (remTrans2 dels numLeaves (ccharToInt forestRows))
   where
     toP x = fromMaybe (error "goToHsPath failed!") $ goIdxToHaskellPath forestRows (fst $ getRootsReverse numLeaves (ccharToInt forestRows)) x
 
@@ -702,3 +705,34 @@ pathToLens (rootIdx, bitsPath) =
     helper :: [Word64] -> Traversal' (Data.Tree.Tree a) (Data.Tree.Tree a)
     helper (bit : rest) = branches . ix (word64ToInt bit) . helper rest
     helper [] = id
+
+
+-- Depth-first or breath-first does not matter since only leaves are returned
+goLeavesFromIdx goIdx numRows numLeaves | not $ inForest goIdx numLeaves (ccharToInt numRows) = error "bad idx for goLeavesFromIdx"
+goLeavesFromIdx goIdx numRows numLeaves | detectRow goIdx (ccharToWord8 numRows) == 0 = [goIdx]
+goLeavesFromIdx goIdx numRows numLeaves = [
+  y
+  | x <- [child goIntIdx numRows, child goIntIdx numRows .|. 1]
+  , y <- goLeavesFromIdx (intToWord64 x) numRows numLeaves
+  ]
+  where
+    goIntIdx :: CULong = word64ToCULong goIdx
+
+-- Copied from tree-diff source
+ppEditTree :: (a -> PP.Doc) -> Edit (EditTree a) -> PP.Doc
+ppEditTree pp = PP.sep . ppEdit
+  where
+    ppEdit (Cpy tree) = [ ppTree tree ]
+    ppEdit (Ins tree) = [ PP.char '+' PP.<> ppTree tree ]
+    ppEdit (Del tree) = [ PP.char '-' PP.<> ppTree tree ]
+    ppEdit (Swp a b) =
+        [ PP.char '-' PP.<> ppTree a
+        , PP.char '+' PP.<> ppTree b
+        ]
+
+    ppTree (EditNode x []) = pp x
+    ppTree (EditNode x xs) = PP.parens $ PP.hang (pp x) 2 $
+       PP.sep $ concatMap ppEdit xs
+
+ppRender :: (Eq a, Show a) => Data.Tree.Tree a -> Data.Tree.Tree a -> String
+ppRender a b = render $ (ppEditTree (PP.text . show)) (treeDiff a b)

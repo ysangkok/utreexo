@@ -7,15 +7,12 @@ import GoImplFunctions (forestWithLeaves, addToForest, swapNodes, printTree)
 import Lib (testLeaves, Pos, toCBTree, tree21, transTree, testLeaves2, updateDirt, Height(..), Pos(..), cbTreeToDataTree, sortLeaves, CBTree(..))
 import UnitTests (unitTests)
 import PropertyTests (propertyTests)
-import Lib ( CBTree)
+import Lib (ppRender)
 import Forest (CLeaf(CLeaf))
 --import Forest (CLeaf(CLeaf))
 
 import System.Exit (die)
 
-import qualified Text.PrettyPrint as PP
-import Text.PrettyPrint (render)
-import Data.TreeDiff.Tree (treeDiff, EditTree(EditNode), Edit(Swp, Ins, Cpy, Del))
 import qualified Data.Tree
 --import Data.WideWord.Word128 (byteSwapWord128)
 import Control.Lens.Operators ((%~), (^?))
@@ -99,7 +96,7 @@ main = do
         hsRoot = Data.Tree.Node (Height 0, Pos 0, CLeaf 0 0) (map (cbTreeToDataTree) f2)
       in do
         putStrLn "Difference:"
-        putStrLn $ render $ ppEditTree (PP.text . show) (treeDiff goRoot hsRoot)
+        putStrLn $ ppRender goRoot hsRoot
 
         -- TODO make an actual unit test
         let unsorted = (CBNode (Height 2) (Pos 5) () (CBNode (Height 2) (Pos 3) () CBEmpty CBEmpty) (CBNode (Height 2) (Pos 2) () CBEmpty CBEmpty))
@@ -113,27 +110,3 @@ main = do
 
     tree <- testSpec "hspec tests" testsHspec
     defaultMain (unitTests tree)
-
--- Copied from tree-diff source
-ppTree :: (a -> PP.Doc) -> Data.Tree.Tree a -> PP.Doc
-ppTree pp = ppT
-  where
-    ppT (Data.Tree.Node x []) = pp x
-    ppT (Data.Tree.Node x xs) = PP.parens $ PP.hang (pp x) 2 $
-        PP.sep $ map ppT xs
-
--- Copied from tree-diff source
-ppEditTree :: (a -> PP.Doc) -> Edit (EditTree a) -> PP.Doc
-ppEditTree pp = PP.sep . ppEdit
-  where
-    ppEdit (Cpy tree) = [ ppTree tree ]
-    ppEdit (Ins tree) = [ PP.char '+' PP.<> ppTree tree ]
-    ppEdit (Del tree) = [ PP.char '-' PP.<> ppTree tree ]
-    ppEdit (Swp a b) =
-        [ PP.char '-' PP.<> ppTree a
-        , PP.char '+' PP.<> ppTree b
-        ]
-
-    ppTree (EditNode x []) = pp x
-    ppTree (EditNode x xs) = PP.parens $ PP.hang (pp x) 2 $
-       PP.sep $ concatMap ppEdit xs
