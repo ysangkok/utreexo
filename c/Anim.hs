@@ -1,12 +1,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 import qualified GoImplFunctions (f21, Forest)
-import Lib (cbTreeToBTree, toCBTree, ipositions, firstTwelveBytes, parent, irows, ccharToInt, getRootsReverse, inumleaves, goIdxToHaskellPath, Path, pathToLens, delsToHsSwaps, goLeavesFromIdx)
+import Lib (cbTreeToBTree, toCBTree, ipositions, firstTwelveBytes, parent, irows, ccharToInt, inumleaves, Path, pathToLens, delsToHsSwaps, goLeavesFromIdx)
 import Forest (CLeaf, cleafToText)
 
 import Foreign.C.Types
 
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes)
 import Data.Tree (Forest, Tree(Node), levels)
 import Data.Function ((&))
 import Data.Semigroup.Foldable (foldMap1)
@@ -21,15 +21,15 @@ import Data.WideWord.Word128 (Word128)
 --import Debug.Trace (traceM)
 --import Control.Monad (forM_)
 import Control.Monad.State.Lazy (lift, runStateT, get, put)
-import Control.Lens.Operators ((.~), (^..), (%~), (^@..), (<.>), (^.))
-import Control.Lens (each, _2, folded, itraversed, partsOf, traversed)
+import Control.Lens.Operators ((.~), (^..), (%~), (^.))
+import Control.Lens (each, _2, folded, partsOf, traversed)
 import Control.Arrow ((&&&))
 --import Data.Profunctor.Optic.Fold1 (folded1)
 
 import Diagrams.TwoD (scale, translateX)
 import Diagrams.TwoD.Types (P2, unp2, mkP2, _x)
 import Diagrams.TwoD.Layout.Tree (uniqueXLayout)
-import Reanimate (scene, reanimate, mkBackground, addStatic, translate, pauseAtEnd, pauseAtBeginning, rotate, play, animate, pause)
+import Reanimate (scene, reanimate, mkBackground, addStatic, translate, pauseAtEnd, pauseAtBeginning, play, animate, pause)
 import qualified Reanimate
 import Reanimate.Animation(Animation)
 import Reanimate.Svg.Constructors (mkText, mkGroup)
@@ -46,7 +46,7 @@ treeAndOffsetToOffsetTree (tree, offset) = (fmap.fmap) (translateX offset) tree
 -- Draw a single node, given its position
 toSVGElement :: P2 Double -> Text -> SVGT.Tree
 toSVGElement p2 levelStr =
-    translate x y $ Reanimate.scale 0.06 $ rotate 6 $ mkText levelStr & SVGT.fontFamily .~ pure ["Ubuntu Mono"]
+    translate x y $ Reanimate.scale 0.06 $ mkText levelStr & SVGT.fontFamily .~ pure ["Ubuntu Mono"]
   where
     (x,y) = unp2 $ nodeCoord p2
 
@@ -76,34 +76,26 @@ oneWidth t =
     maxX - minX + 5
 
 -- Given a forest, find the given sub-tree and offset it by the given vector, and draw them all
-svgT :: Word64 -> CChar -> Forest (CLeaf, P2 Double) -> Tree CLeaf -> P2 Double -> Map Word128 Word64 -> [SVGT.Tree]
-svgT leavesCount forestRows xOffsetTrees leavesToAnimate dest positions =
+svgT :: CChar -> Forest (CLeaf, P2 Double) -> Tree CLeaf -> P2 Double -> Map Word128 Word64 -> [SVGT.Tree]
+svgT forestRows xOffsetTrees leavesToAnimate dest positions =
   -- Generated Haskell path and Haskell path should be the same.
   [ toSVGElement newPos labelText
-    | (
-        haskellPath,
-        (leaf :: CLeaf, pos :: P2 Double, children :: Forest (CLeaf, P2 Double))
-      ) <- withIndices
+    | (leaf :: CLeaf, pos :: P2 Double, children) <- withItself ^.. traversed.traversed
     , let newPos = if leaf `elem` leavesToAnimate
                      then pos+dest
                      else pos
     , let goIdx = alwaysIndex forestRows positions leaf children
-    , let generatedHaskellPath = fromMaybe (error ("bad go path for haskpath generator" ++ show (forestRows, goIdx))) $ goIdxToHaskellPath forestRows treeRootPositions goIdx
     , let dataLabel = cleafToText leaf
-    , let posLabel = pack $ show (goIdx, generatedHaskellPath, haskellPath)
+    , let posLabel = pack $ show goIdx
     , let labelText = dataLabel <> " " <> posLabel
   ]
   where
-    treeRootPositions = fst $ getRootsReverse leavesCount (ccharToInt forestRows)
     -- This function puts the children of a node inside the node itself
     xOffsetTreeWithChildren :: Tree (a, b) -> Tree (a, b, Forest (a, b))
     xOffsetTreeWithChildren (Node (x, y) children) = Node (x, y, children) (fmap xOffsetTreeWithChildren children)
     -- We need the children to calculate the Go-style indices, so use the previous function on all tree items
     withItself :: Forest (CLeaf, P2 Double, Forest (CLeaf, P2 Double))
     withItself = fmap xOffsetTreeWithChildren xOffsetTrees
-    -- Calculate Haskell-style path down tree
-    withIndices :: [((Int, [Int]), (CLeaf, P2 Double, Forest (CLeaf, P2 Double)))]
-    withIndices = withItself ^@.. itraversed <.> itraversed
     
 
 mkAnim :: GoImplFunctions.Forest -> Animation
@@ -129,13 +121,14 @@ mkAnim f =
 
     --destLens :: Getting (First (Tree a)) (Forest a) (Tree a)
     --destLens = ix 0 . branches . ix 0 . branches . ix 1
+    goIndicesToDelete = [4..9]
 
   in
     -- runState is outside, such that one single state is used in each traversed element
     scene (do
       play $ pause 0.001
       flip runStateT (ipositions f, xOffsetTrees) $
-        flip traverse (delsToHsSwaps [4..9] 15 4 ^.. traverse.traverse) $ \(fromPos, from, to, toPos) -> do
+        flip traverse (delsToHsSwaps goIndicesToDelete (inumleaves f) (irows f) ^.. traverse.traverse) $ \(fromPos, from, to, toPos) -> do
           (currentPositions, currentForest) <- get
           let (newPositions, newForest, a) = makeScene (inumleaves f) (irows f) (fromPos, from, to, toPos) currentPositions currentForest
           put (newPositions, newForest)
@@ -164,7 +157,7 @@ makeScene numLeaves numRows (fromGoIdx :: Word64, from :: Path, dest :: Path, de
       let
         scaled = scale fraction (destPos - fromPos)
       in
-        mkGroup $ svgT numLeaves numRows currentForest onlyCLeaves scaled positions
+        mkGroup $ svgT numRows currentForest onlyCLeaves scaled positions
     destLeaves = last $ levels destTree
     fromLeaves = last $ levels fromTree
     destReplacementLeaves = Data.Map.fromList
