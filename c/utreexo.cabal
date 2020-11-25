@@ -28,7 +28,6 @@ common libs
                      , zippers
                      , reanimate
                      , reanimate-svg
-                     , diagrams-contrib
                      , diagrams-lib
                      , text
                      , semigroupoids
@@ -58,3 +57,4 @@ executable anim
   other-modules:       Forest
                        GoImplFunctions
                        Lib
+                       DiagramsTree

@@ -13,7 +13,6 @@
 
 module Lib where
 
-import Diagrams.TwoD.Layout.Tree (BTree(Empty, BNode))
 import Data.Data (Data)
 
 import Prelude hiding (drop, lookup)
@@ -33,14 +32,14 @@ import Control.Lens.Plated (rewriteOf, transformOf)
 import Data.Data.Lens (uniplate)
                         --     set   upd
 import Control.Lens.At (at, ix)
-import Control.Lens.Combinators (Lens', Traversal', lens, itraversed, indices, unsafeSingular)
+import Control.Lens (_1, _2, backwards)
+import Control.Lens.Combinators (Lens', Traversal', lens, traversed, itraversed, indices, unsafeSingular)
 import Data.Word (Word64, Word8)
 import Data.List (inits, sort, sortOn)
 import Data.List.Split (chunksOf)
 import Data.Maybe (catMaybes, listToMaybe, fromMaybe)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR, xor)
 import qualified Data.Tree
-import Data.Tree.Lens (branches)
 import Data.TreeDiff.Tree (treeDiff, EditTree(EditNode), Edit(Swp, Ins, Cpy, Del))
 import Text.PrettyPrint (render)
 import qualified Text.PrettyPrint as PP
@@ -558,6 +557,15 @@ myUnfoldTree a root =
 myUnfoldForest :: IForest a => a -> [(Pos, Int)] -> [CBTree CLeaf]
 myUnfoldForest a = map (myUnfoldTree a)
 
+nodeVal :: Lens' (CBTree a) a
+nodeVal = lens cget cset
+    where
+        cget (CBNode _ _ v _ _) = v
+        cget _ = error "only works on non-leaves"
+        cset :: (CBTree a) -> a -> (CBTree a)
+        cset (CBNode h p _ a b) v = CBNode h p v a b
+        cset _ _ = error "only works on non-leaves"
+
 -- children of a GADT tree node
 chldr :: Lens' (CBTree a) ((CBTree a), (CBTree a))
 chldr = lens cget cset
@@ -578,33 +586,33 @@ transTree f =
     let zipping :: Top :>> CBTree CLeaf = zipper f
         zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
         transd = zipTrans zipping
-    in recalcPositions $ sortLeaves $ rezip transd
+    in recalcPositions $ head $ sortLeaves [rezip transd]
 
 isLeaf :: Height -> Pos -> Bool
 isLeaf (Height h) (Pos p) = detectRow (intToWord64 p) (intToWord8 h) == 0
 
 -- Sort leaf positions, don't touch values
-sortLeaves :: forall a. (Data a, Ord a, Show a, Eq a) => CBTree a -> CBTree a
-sortLeaves CBEmpty = CBEmpty
-sortLeaves f@(CBNode h _ _ _ _) =
+sortLeaves :: forall a. (Data a, Ord a, Show a, Eq a) => [CBTree a] -> [CBTree a]
+sortLeaves f@((CBNode h _ _ _ _) : _) =
     -- With partsOf you can only replace values. But we want to replace keys
     -- f & partsOf (traverse.filtered (`elem` (map snd toSort)))
     -- .~ sorted
-    transformOf uniplate (\org ->
+    map (transformOf uniplate (\org ->
       case org of
         CBNode leafHeight p v a b ->
           case lookup p mapped of
             Just newPos -> CBNode leafHeight newPos v a b
             Nothing -> org
         CBEmpty -> org
-    ) f
+    )) f
   where
     toSort :: [Pos]
-    toSort = map fst $ f ^@.. itraversed . indices (isLeaf h)
+    toSort = map fst $ f ^@.. backwards traversed . itraversed . indices (isLeaf h)
     sorted :: [Pos]
     sorted = sort toSort
     mapped :: Map Pos Pos
     mapped = fromList $ zip toSort sorted
+sortLeaves _ = error "must have at least one tree in forest"
 
 recalcPos :: Height -> Int -> Int -> Pos
 recalcPos (Height h) childA childB =
@@ -657,10 +665,6 @@ instance TraversableWithIndex Pos CBTree where
       liftA2 (n h p) (fun p a) (liftA2 (,) l r)
   itraverse _ CBEmpty = pure CBEmpty
 
-cbTreeToBTree :: CBTree a -> BTree a
-cbTreeToBTree CBEmpty = Empty
-cbTreeToBTree (CBNode _ _ a left right) = BNode a (cbTreeToBTree left) (cbTreeToBTree right)
-
 cbNodeToDataTree :: CBTree a -> ((Height, Pos, a), [CBTree a])
 cbNodeToDataTree (CBNode h p cleaf CBEmpty CBEmpty) = ((h, p, cleaf), [])
 cbNodeToDataTree (CBNode h p cleaf t1@(CBNode _ _ _ _ _) t2@(CBNode _ _ _ _ _)) = ((h, p, cleaf), [t1, t2])
@@ -692,31 +696,35 @@ goIdxToHaskellPath forestRows rootPos goIdx = do
       untilHere <- goDown (parent idx (ccharToInt forestRows)) (h+1)
       return $ untilHere ++ [idx .&. 1]
 
-delsToHsSwaps :: [Word64] -> Word64 -> CChar -> [[(Word64, Path, Path, Word64)]]
+delsToHsSwaps :: [Word64] -> Word64 -> CChar -> [[(Path, Path)]]
 delsToHsSwaps dels numLeaves forestRows =
-    (fmap.fmap) (\(x,y) -> (x, toP x, toP y, y)) (remTrans2 dels numLeaves (ccharToInt forestRows))
+    (fmap.fmap) (\(x,y) -> (toP x, toP y)) (remTrans2 dels numLeaves (ccharToInt forestRows))
   where
     toP x = fromMaybe (error "goToHsPath failed!") $ goIdxToHaskellPath forestRows (fst $ getRootsReverse numLeaves (ccharToInt forestRows)) x
 
-pathToLens :: Path -> Lens' (Data.Tree.Forest a) (Data.Tree.Tree a)
+
+pathToLens :: Path -> Lens' ([CBTree a]) (CBTree a)
 pathToLens (rootIdx, bitsPath) =
     unsafeSingular $ ix rootIdx . helper bitsPath
   where
-    helper :: [Word64] -> Traversal' (Data.Tree.Tree a) (Data.Tree.Tree a)
-    helper (bit : rest) = branches . ix (word64ToInt bit) . helper rest
+    helper :: [Word64] -> Traversal' (CBTree a) (CBTree a)
+    helper (0 : rest) = chldr . _1 . helper rest
+    helper (1 : rest) = chldr . _2 . helper rest
     helper [] = id
+    helper _ = error "path did contain something that wasn't a bit"
 
 
--- Depth-first or breath-first does not matter since only leaves are returned
-goLeavesFromIdx goIdx numRows numLeaves | not $ inForest goIdx numLeaves (ccharToInt numRows) = error "bad idx for goLeavesFromIdx"
-goLeavesFromIdx goIdx numRows numLeaves | detectRow goIdx (ccharToWord8 numRows) == 0 = [goIdx]
-goLeavesFromIdx goIdx numRows numLeaves = [
-  y
-  | x <- [child goIntIdx numRows, child goIntIdx numRows .|. 1]
-  , y <- goLeavesFromIdx (intToWord64 x) numRows numLeaves
-  ]
-  where
-    goIntIdx :: CULong = word64ToCULong goIdx
+---- Depth-first or breath-first does not matter since only leaves are returned
+--goLeavesFromIdx :: Word64 -> CChar -> Word64 -> [Word64]
+--goLeavesFromIdx goIdx numRows numLeaves | not $ inForest goIdx numLeaves (ccharToInt numRows) = error "bad idx for goLeavesFromIdx"
+--goLeavesFromIdx goIdx numRows numLeaves | detectRow goIdx (ccharToWord8 numRows) == 0 = [goIdx]
+--goLeavesFromIdx goIdx numRows numLeaves = [
+--  y
+--  | x <- [child goIntIdx numRows, child goIntIdx numRows .|. 1]
+--  , y <- goLeavesFromIdx (intToWord64 x) numRows numLeaves
+--  ]
+--  where
+--    goIntIdx :: CULong = word64ToCULong goIdx
 
 -- Copied from tree-diff source
 ppEditTree :: (a -> PP.Doc) -> Edit (EditTree a) -> PP.Doc

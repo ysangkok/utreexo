@@ -99,9 +99,9 @@ main = do
         putStrLn $ ppRender goRoot hsRoot
 
         -- TODO make an actual unit test
-        let unsorted = (CBNode (Height 2) (Pos 5) () (CBNode (Height 2) (Pos 3) () CBEmpty CBEmpty) (CBNode (Height 2) (Pos 2) () CBEmpty CBEmpty))
+        let unsorted = [(CBNode (Height 2) (Pos 5) () (CBNode (Height 2) (Pos 3) () CBEmpty CBEmpty) (CBNode (Height 2) (Pos 2) () CBEmpty CBEmpty))]
         putStrLn "This (below) should show that the positions are swapped. But we are just swapping values..."
-        putStrLn $ show $ cbTreeToDataTree $ sortLeaves unsorted
+        putStrLn $ show $ map cbTreeToDataTree $ sortLeaves unsorted
         --print $ unsorted ^. partsOf (itraversed . _2 . filtered isLeaf)
         die "Trees differed"
 
