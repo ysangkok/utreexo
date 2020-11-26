@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 import qualified GoImplFunctions (f21, Forest)
-import Lib (toCBTree, irows, ccharToInt, inumleaves, Path, pathToLens, delsToHsSwaps, goIdxToHaskellPath, getRootsReverse, CBTree(..), Pos, nodeVal, sortLeaves)
+import Lib (toCBTree, irows, ccharToInt, inumleaves, Path, pathToLens, delsToHsSwaps, goIdxToHaskellPath, getRootsReverse, CBTree(..), Pos, nodeVal)
 import Forest (CLeaf, cleafToText)
 
 import Data.Monoid (appEndo, Endo(Endo))
@@ -17,7 +17,8 @@ import Data.Text (pack, Text)
 --import Control.Monad (forM_)
 import Control.Monad.State.Lazy (lift, execStateT, get, put)
 import Control.Lens.Operators ((.~), (^..), (%~), (^.), (^@..))
-import Control.Lens (each, _1, _2, _3, folded, partsOf, traversed, itraversed, (.>), view)
+import Control.Lens (each, _1, _2, _3, folded, partsOf, traversed, itraversed, (.>), view, Lens')
+import Control.Lens.Unsound (lensProduct)
 import Control.Arrow ((&&&))
 --import Data.Profunctor.Optic.Fold1 (folded1)
 
@@ -103,7 +104,7 @@ mkAnim f =
         flip traverse (delsToHsSwaps goIndicesToDelete (inumleaves f) (irows f) ^.. traverse.traverse) $ \(from, to) -> do
           currentForest <- get
           let (newForest, a) = makeScene (from, to) currentForest
-          put $ sortLeaves $ newForest
+          put newForest
           lift $ play a
           --forM_ (zip currentForest newForest) $ \(curTree, newTree) -> do
           --  traceM $ ppRender curTree newTree
@@ -136,13 +137,15 @@ makeScene (from :: Path, dest :: Path) currentForest =
         scaled = scale fraction (destPos - fromPos)
       in
         mkGroup $ svgT currentForest onlyCLeaves scaled
-    fromPositions :: [P2 Double]
-    fromPositions = fromTree ^.. traversed . _2
-    destPositions :: [P2 Double]
-    destPositions = destTree ^.. traversed . _2
+    dataAndHighlightSelector :: Lens' (a, b, c) (a, c)
+    dataAndHighlightSelector = (lensProduct _1 _3)
+    fromPositions :: [(CLeaf, Bool)]
+    fromPositions = fromTree ^.. traversed . dataAndHighlightSelector
+    destPositions :: [(CLeaf, Bool)]
+    destPositions = destTree ^.. traversed . dataAndHighlightSelector
     newForest =
-      currentForest & pathToLens from .~ (destTree & partsOf (traversed . _2) .~ fromPositions)
-                    & pathToLens dest .~ (fromTree & partsOf (traversed . _2) .~ destPositions)
+      currentForest & pathToLens from .~ (fromTree & partsOf (traversed . dataAndHighlightSelector) .~ destPositions)
+                    & pathToLens dest .~ (destTree & partsOf (traversed . dataAndHighlightSelector) .~ fromPositions)
   in
     (newForest, animate tweenForest)
 
