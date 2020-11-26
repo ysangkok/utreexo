@@ -448,10 +448,8 @@ hhashRow forest dirt =
             abHash = parentHash chldA chldB
           in
             abHash --trace (show (chld, chldA, chldB, abHash)) abHash
-        culongToInt :: CULong -> Int
-        culongToInt = fromInteger . toInteger
         intDirt :: [Int]
-        intDirt = map culongToInt dirt
+        intDirt = map cuLongToInt dirt
         written = flip execState olddat $ do
             forM_ (zip intDirt hashed) $ \(hp :: Int, result :: CLeaf) -> do
                 (gotten :: [CLeaf]) <- State.get

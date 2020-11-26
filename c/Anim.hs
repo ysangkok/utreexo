@@ -139,13 +139,13 @@ makeScene (from :: Path, dest :: Path) currentForest =
         mkGroup $ svgT currentForest onlyCLeaves scaled
     dataAndHighlightSelector :: Lens' (a, b, c) (a, c)
     dataAndHighlightSelector = (lensProduct _1 _3)
-    fromPositions :: [(CLeaf, Bool)]
-    fromPositions = fromTree ^.. traversed . dataAndHighlightSelector
-    destPositions :: [(CLeaf, Bool)]
-    destPositions = destTree ^.. traversed . dataAndHighlightSelector
+    fromDataHighlight :: [(CLeaf, Bool)]
+    fromDataHighlight = fromTree ^.. traversed . dataAndHighlightSelector
+    destDataHighlight :: [(CLeaf, Bool)]
+    destDataHighlight = destTree ^.. traversed . dataAndHighlightSelector
     newForest =
-      currentForest & pathToLens from .~ (fromTree & partsOf (traversed . dataAndHighlightSelector) .~ destPositions)
-                    & pathToLens dest .~ (destTree & partsOf (traversed . dataAndHighlightSelector) .~ fromPositions)
+      currentForest & pathToLens from .~ (fromTree & partsOf (traversed . dataAndHighlightSelector) .~ destDataHighlight)
+                    & pathToLens dest .~ (destTree & partsOf (traversed . dataAndHighlightSelector) .~ fromDataHighlight)
   in
     (newForest, animate tweenForest)
 
