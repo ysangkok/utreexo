@@ -212,7 +212,7 @@ func (p *Pollard) rem2(dels []uint64) error {
 			// check if doing dirt. if not dirt, swap.
 			// (maybe a little clever here...)
 			if len(swapRows[h]) == 0 ||
-				len(hashDirt) != 0 && hashDirt[0] > swapRows[h][0].to {
+				len(hashDirt) != 0 && hashDirt[0] > swapRows[h][0].To {
 				// re-descending here which isn't great
 				// fmt.Printf("hashing from dirt %d\n", hashDirt[0])
 				hn, err = p.hnFromPos(hashDirt[0])
@@ -222,7 +222,7 @@ func (p *Pollard) rem2(dels []uint64) error {
 				hashDirt = hashDirt[1:]
 			} else { // swapping
 				// fmt.Printf("swapping %v\n", swaprows[h][0])
-				if swapRows[h][0].from == swapRows[h][0].to {
+				if swapRows[h][0].From == swapRows[h][0].To {
 					// TODO should get rid of these upstream
 					// panic("got non-moving swap")
 					swapRows[h] = swapRows[h][1:]
@@ -232,7 +232,7 @@ func (p *Pollard) rem2(dels []uint64) error {
 				if err != nil {
 					return err
 				}
-				collapse = swapRows[h][0].collapse
+				collapse = swapRows[h][0].Collapse
 				swapRows[h] = swapRows[h][1:]
 			}
 			if hn == nil ||
@@ -312,7 +312,7 @@ func (p *Pollard) hnFromPos(pos uint64) (*hashableNode, error) {
 
 // swapNodes swaps the nodes at positions a and b.
 // returns a hashable node with b, bsib, and bpar
-func (p *Pollard) swapNodes(s arrow, row uint8) (*hashableNode, error) {
+func (p *Pollard) swapNodes(s Arrow, row uint8) (*hashableNode, error) {
 
 	// if !inForest(s.from, p.numLeaves, p.rows()) ||
 	// !inForest(s.to, p.numLeaves, p.rows()) {
@@ -321,8 +321,8 @@ func (p *Pollard) swapNodes(s arrow, row uint8) (*hashableNode, error) {
 	// }
 
 	if p.positionMap != nil {
-		a := childMany(s.from, row, p.rows())
-		b := childMany(s.to, row, p.rows())
+		a := childMany(s.From, row, p.rows())
+		b := childMany(s.To, row, p.rows())
 		run := uint64(1 << row)
 		// happens before the actual swap, so swapping a and b
 		for i := uint64(0); i < run; i++ {
@@ -338,24 +338,24 @@ func (p *Pollard) swapNodes(s arrow, row uint8) (*hashableNode, error) {
 	// TODO could be improved by getting the highest common ancestor
 	// and then splitting instead of doing 2 full descents
 
-	a, asib, _, err := p.grabPos(s.from)
+	a, asib, _, err := p.grabPos(s.From)
 	if err != nil {
 		return nil, err
 	}
-	b, bsib, bhn, err := p.grabPos(s.to)
+	b, bsib, bhn, err := p.grabPos(s.To)
 	if err != nil {
 		return nil, err
 	}
 	if asib == nil || bsib == nil {
-		return nil, fmt.Errorf("swapNodes %d %d sibling not found", s.from, s.to)
+		return nil, fmt.Errorf("swapNodes %d %d sibling not found", s.From, s.To)
 	}
 	if a == nil || b == nil {
-		return nil, fmt.Errorf("swapNodes %d %d node not found", s.from, s.to)
+		return nil, fmt.Errorf("swapNodes %d %d node not found", s.From, s.To)
 	}
 
 	// fmt.Printf("swapNodes swapping a %d %x with b %d %x\n",
 	// r.from, a.data[:4], r.to, b.data[:4])
-	bhn.position = parent(s.to, p.rows())
+	bhn.position = parent(s.To, p.rows())
 	// do the actual swap here
 	err = polSwap(a, asib, b, bsib)
 	if err != nil {
@@ -455,18 +455,18 @@ func (p *Pollard) grabPos(
 // a good toString method for  forest.
 func (p *Pollard) toFull() (*Forest, error) {
 	ff := NewForest(nil, false, "", 0)
-	ff.rows = p.rows()
-	ff.numLeaves = p.numLeaves
-	ff.data = new(ramForestData)
-	ff.data.resize((2 << ff.rows) - 1)
+	ff.Rows = p.rows()
+	ff.NumLeaves = p.numLeaves
+	ff.Data = new(RamForestData)
+	ff.Data.resize((2 << ff.Rows) - 1)
 	if p.numLeaves == 0 {
 		return ff, nil
 	}
 
 	// very naive loop looping outside the edge of the tree
-	for i := uint64(0); i < (2<<ff.rows)-1; i++ {
+	for i := uint64(0); i < (2<<ff.Rows)-1; i++ {
 		// check if the leaf is within the tree
-		if !inForest(i, ff.numLeaves, ff.rows) {
+		if !inForest(i, ff.NumLeaves, ff.Rows) {
 			continue
 		}
 		n, _, _, err := p.readPos(i)
@@ -474,7 +474,7 @@ func (p *Pollard) toFull() (*Forest, error) {
 			return nil, err
 		}
 		if n != nil {
-			ff.data.write(i, n.data)
+			ff.Data.write(i, n.data)
 		}
 	}
 
@@ -504,18 +504,18 @@ func (p *Pollard) ToString() string {
 // equalToForest checks if the pollard has the same leaves as the forest.
 // doesn't check roots and stuff
 func (p *Pollard) equalToForest(f *Forest) bool {
-	if p.numLeaves != f.numLeaves {
+	if p.numLeaves != f.NumLeaves {
 		return false
 	}
 
-	for leafpos := uint64(0); leafpos < f.numLeaves; leafpos++ {
+	for leafpos := uint64(0); leafpos < f.NumLeaves; leafpos++ {
 		n, _, _, err := p.grabPos(leafpos)
 		if err != nil {
 			return false
 		}
-		if n.data != f.data.read(leafpos) {
+		if n.data != f.Data.Read(leafpos) {
 			fmt.Printf("leaf position %d pol %x != forest %x\n",
-				leafpos, n.data[:4], f.data.read(leafpos).Prefix())
+				leafpos, n.data[:4], f.Data.Read(leafpos).Prefix())
 			return false
 		}
 	}
@@ -526,18 +526,18 @@ func (p *Pollard) equalToForest(f *Forest) bool {
 // it's OK though for a leaf not to be there; only it can't exist and have
 // a different value than one in the forest
 func (p *Pollard) equalToForestIfThere(f *Forest) bool {
-	if p.numLeaves != f.numLeaves {
+	if p.numLeaves != f.NumLeaves {
 		return false
 	}
 
-	for leafpos := uint64(0); leafpos < f.numLeaves; leafpos++ {
+	for leafpos := uint64(0); leafpos < f.NumLeaves; leafpos++ {
 		n, _, _, err := p.grabPos(leafpos)
 		if err != nil || n == nil {
 			continue // ignore grabPos errors / nils
 		}
-		if n.data != f.data.read(leafpos) {
+		if n.data != f.Data.Read(leafpos) {
 			fmt.Printf("leaf position %d pol %x != forest %x\n",
-				leafpos, n.data[:4], f.data.read(leafpos).Prefix())
+				leafpos, n.data[:4], f.Data.Read(leafpos).Prefix())
 			return false
 		}
 	}

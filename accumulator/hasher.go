@@ -6,11 +6,11 @@ type hashableNode struct {
 	position  uint64 // doesn't really need to be there, but convenient for debugging
 }
 
-func (f *Forest) hashRow(dirtpositions []uint64) error {
+func (f *Forest) HashRow(dirtpositions []uint64) error {
 	for _, hp := range dirtpositions {
-		l := f.data.read(child(hp, f.rows))
-		r := f.data.read(child(hp, f.rows) | 1)
-		f.data.write(hp, parentHash(l, r))
+		l := f.Data.Read(child(hp, f.Rows))
+		r := f.Data.Read(child(hp, f.Rows) | 1)
+		f.Data.write(hp, parentHash(l, r))
 	}
 
 	return nil

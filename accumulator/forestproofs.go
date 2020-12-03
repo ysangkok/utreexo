@@ -19,21 +19,21 @@ func (f *Forest) Prove(wanted Hash) (Proof, error) {
 	var pr Proof
 	var empty [32]byte
 	// first look up where the hash is
-	pos, ok := f.positionMap[wanted.Mini()]
+	pos, ok := f.PositionMap[wanted.Mini()]
 	if !ok {
 		return pr, fmt.Errorf("hash %x not found", wanted)
 	}
 
 	// should never happen
-	if pos > f.numLeaves {
+	if pos > f.NumLeaves {
 		return pr, fmt.Errorf("prove: got leaf position %d but only %d leaves exist",
-			pos, f.numLeaves)
+			pos, f.NumLeaves)
 	}
 
 	// build empty proof branch slice of siblings
 	// not full rows -- need to figure out which subtree it's in!
-	pr.Siblings = make([]Hash, detectSubTreeRows(pos, f.numLeaves, f.rows))
-	pr.Payload = f.data.read(pos)
+	pr.Siblings = make([]Hash, detectSubTreeRows(pos, f.NumLeaves, f.Rows))
+	pr.Payload = f.Data.Read(pos)
 	if pr.Payload != wanted {
 		return pr, fmt.Errorf(
 			"prove: forest and position map conflict. want %x got %x at pos %d",
@@ -45,15 +45,15 @@ func (f *Forest) Prove(wanted Hash) (Proof, error) {
 	// go up and populate the siblings
 	for h, _ := range pr.Siblings {
 
-		pr.Siblings[h] = f.data.read(pos ^ 1)
+		pr.Siblings[h] = f.Data.Read(pos ^ 1)
 		if pr.Siblings[h] == empty {
 			fmt.Print(f.ToString())
 			return pr, fmt.Errorf(
 				"prove: got empty hash proving leaf %d row %d pos %d nl %d",
-				pr.Position, h, pos^1, f.numLeaves)
+				pr.Position, h, pos^1, f.NumLeaves)
 		}
 		//		fmt.Printf("sibling %d: pos %d %x\n", h, pos^1, pr.Siblings[h][:4])
-		pos = parent(pos, f.rows)
+		pos = parent(pos, f.Rows)
 
 	}
 
@@ -82,7 +82,7 @@ func (f *Forest) Verify(p Proof) bool {
 	n := p.Payload
 	//	fmt.Printf("check position %d %04x inclusion\n", p.Position, n[:4])
 
-	subTreeRows := detectSubTreeRows(p.Position, f.numLeaves, f.rows)
+	subTreeRows := detectSubTreeRows(p.Position, f.NumLeaves, f.Rows)
 	// there should be as many siblings as the rows of the sub-tree
 	// (0 rows means there are no siblings; there is no proof)
 	if uint8(len(p.Siblings)) != subTreeRows {
@@ -105,13 +105,13 @@ func (f *Forest) Verify(p Proof) bool {
 		}
 	}
 
-	subTreeRootPos := parentMany(p.Position, subTreeRows, f.rows)
+	subTreeRootPos := parentMany(p.Position, subTreeRows, f.Rows)
 
-	if subTreeRootPos >= f.data.size() {
+	if subTreeRootPos >= f.Data.Size() {
 		fmt.Printf("ERROR don't have root at %d\n", subTreeRootPos)
 		return false
 	}
-	subRoot := f.data.read(subTreeRootPos)
+	subRoot := f.Data.Read(subTreeRootPos)
 
 	if n != subRoot {
 		fmt.Printf("got %04x subroot %04x\n", n[:4], subRoot[:4])
@@ -141,7 +141,7 @@ func (f *Forest) ProveBatch(hs []Hash) (BatchProof, error) {
 	if len(hs) == 0 {
 		return bp, nil
 	}
-	if f.data.size() < 2 {
+	if f.Data.Size() < 2 {
 		return bp, nil
 	}
 
@@ -152,20 +152,20 @@ func (f *Forest) ProveBatch(hs []Hash) (BatchProof, error) {
 
 	for i, wanted := range hs {
 
-		pos, ok := f.positionMap[wanted.Mini()]
+		pos, ok := f.PositionMap[wanted.Mini()]
 		if !ok {
 			fmt.Print(f.ToString())
 			return bp, fmt.Errorf("hash %x not found", wanted)
 		}
 
 		// should never happen
-		if pos > f.numLeaves {
-			for m, p := range f.positionMap {
+		if pos > f.NumLeaves {
+			for m, p := range f.PositionMap {
 				fmt.Printf("%x @%d\t", m[:4], p)
 			}
 			return bp, fmt.Errorf(
 				"ProveBatch: got leaf position %d but only %d leaves exist",
-				pos, f.numLeaves)
+				pos, f.NumLeaves)
 		}
 		bp.Targets[i] = pos
 	}
@@ -177,11 +177,11 @@ func (f *Forest) ProveBatch(hs []Hash) (BatchProof, error) {
 	copy(sortedTargets, bp.Targets)
 	sortUint64s(sortedTargets)
 
-	proofPositions, _ := ProofPositions(sortedTargets, f.numLeaves, f.rows)
+	proofPositions, _ := ProofPositions(sortedTargets, f.NumLeaves, f.Rows)
 	targetsAndProof := mergeSortedSlices(proofPositions, sortedTargets)
 	bp.Proof = make([]Hash, len(targetsAndProof))
 	for i, proofPos := range targetsAndProof {
-		bp.Proof[i] = f.data.read(proofPos)
+		bp.Proof[i] = f.Data.Read(proofPos)
 	}
 
 	if verbose {
@@ -195,6 +195,6 @@ func (f *Forest) ProveBatch(hs []Hash) (BatchProof, error) {
 
 // VerifyBatchProof :
 func (f *Forest) VerifyBatchProof(bp BatchProof) bool {
-	ok, _, _ := verifyBatchProof(bp, f.getRoots(), f.numLeaves, nil)
+	ok, _, _ := verifyBatchProof(bp, f.getRoots(), f.NumLeaves, nil)
 	return ok
 }

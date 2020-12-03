@@ -39,12 +39,12 @@ func (f *Forest) Undo(ub undoBlock) error {
 	prevAdds := uint64(ub.numAdds)
 	prevDels := uint64(len(ub.hashes))
 	// how many leaves were there at the last block?
-	prevNumLeaves := f.numLeaves + prevDels - prevAdds
+	prevNumLeaves := f.NumLeaves + prevDels - prevAdds
 	// run the transform to figure out where things came from
-	leafMoves := floorTransform(ub.positions, prevNumLeaves, f.rows)
+	leafMoves := floorTransform(ub.positions, prevNumLeaves, f.Rows)
 	reverseArrowSlice(leafMoves)
 	// first undo the leaves added in the last block
-	f.numLeaves -= prevAdds
+	f.NumLeaves -= prevAdds
 	// clear out the hashes themselves (maybe don't need to but seems safer)
 	// leaves dangling parents, but other things do that still...
 	// for pos := f.numLeaves; pos < f.numLeaves+prevAdds; pos++ {
@@ -52,14 +52,14 @@ func (f *Forest) Undo(ub undoBlock) error {
 	// }
 
 	fmt.Printf("\t\t### UNDO DATA\n")
-	fmt.Printf("fnl %d leaf moves %d %v\n", f.numLeaves, len(leafMoves), leafMoves)
+	fmt.Printf("fnl %d leaf moves %d %v\n", f.NumLeaves, len(leafMoves), leafMoves)
 	fmt.Printf("ub hashes %d\n", len(ub.hashes))
 
 	// remove everything between prevNumLeaves and numLeaves from positionMap
-	for p := f.numLeaves; p < f.numLeaves+prevAdds; p++ {
+	for p := f.NumLeaves; p < f.NumLeaves+prevAdds; p++ {
 		fmt.Printf("remove %x@%d from map\n",
-			f.data.read(p).Prefix(), f.positionMap[f.data.read(p).Mini()])
-		delete(f.positionMap, f.data.read(p).Mini())
+			f.Data.Read(p).Prefix(), f.PositionMap[f.Data.Read(p).Mini()])
+		delete(f.PositionMap, f.Data.Read(p).Mini())
 	}
 
 	// also add everything past numleaves and prevnumleaves to dirt
@@ -73,43 +73,43 @@ func (f *Forest) Undo(ub undoBlock) error {
 		if h == empty {
 			return fmt.Errorf("hash %d in undoblock is empty", i)
 		}
-		f.data.write(f.numLeaves+uint64(i), h)
-		dirt = append(dirt, f.numLeaves+uint64(i))
+		f.Data.write(f.NumLeaves+uint64(i), h)
+		dirt = append(dirt, f.NumLeaves+uint64(i))
 	}
 
 	// go through swaps in reverse order
 	for i, a := range leafMoves {
-		fmt.Printf("swapped %d %x, %d %x\n", a.to,
-			f.data.read(a.to).Prefix(), a.from, f.data.read(a.from).Prefix())
-		f.data.swapHash(a.from, a.to)
-		dirt[2*i] = a.to       // this is wrong, it way over hashes
-		dirt[(2*i)+1] = a.from // also should be parents
+		fmt.Printf("swapped %d %x, %d %x\n", a.To,
+			f.Data.Read(a.To).Prefix(), a.From, f.Data.Read(a.From).Prefix())
+		f.Data.swapHash(a.From, a.To)
+		dirt[2*i] = a.To       // this is wrong, it way over hashes
+		dirt[(2*i)+1] = a.From // also should be parents
 	}
 
 	// update positionMap.  The stuff we do want has been moved in to the forest,
 	// the stuff we don't want has been moved to the right past the edge
-	for p := f.numLeaves; p < prevNumLeaves; p++ {
-		fmt.Printf("put back edge %x@%d from map\n", f.data.read(p).Prefix(), p)
-		f.positionMap[f.data.read(p).Mini()] = p
+	for p := f.NumLeaves; p < prevNumLeaves; p++ {
+		fmt.Printf("put back edge %x@%d from map\n", f.Data.Read(p).Prefix(), p)
+		f.PositionMap[f.Data.Read(p).Mini()] = p
 	}
 	for _, p := range ub.positions {
-		fmt.Printf("put back internal %x@%d in map\n", f.data.read(p).Prefix(), p)
-		f.positionMap[f.data.read(p).Mini()] = p
+		fmt.Printf("put back internal %x@%d in map\n", f.Data.Read(p).Prefix(), p)
+		f.PositionMap[f.Data.Read(p).Mini()] = p
 	}
 	for _, d := range dirt {
 		// everything that moved needs to have its position updated in the map
 		// TODO does it..?
-		m := f.data.read(d).Mini()
-		oldpos := f.positionMap[m]
+		m := f.Data.Read(d).Mini()
+		oldpos := f.PositionMap[m]
 		if oldpos != d {
 			fmt.Printf("update map %x %d to %d\n", m[:4], oldpos, d)
-			delete(f.positionMap, m)
-			f.positionMap[m] = d
+			delete(f.PositionMap, m)
+			f.PositionMap[m] = d
 		}
 	}
 
 	// rehash above all tos/froms
-	f.numLeaves = prevNumLeaves // change numLeaves before rehashing
+	f.NumLeaves = prevNumLeaves // change numLeaves before rehashing
 	sortUint64s(dirt)
 	fmt.Printf("rehash dirt: %v\n", dirt)
 	err := f.reHash(dirt)
@@ -132,7 +132,7 @@ func (f *Forest) BuildUndoData(numadds uint64, dels []uint64) *undoBlock {
 
 	// populate all the hashes from the left edge of the forest
 	for i, _ := range ub.positions {
-		ub.hashes[i] = f.data.read(f.numLeaves + uint64(i))
+		ub.hashes[i] = f.Data.Read(f.NumLeaves + uint64(i))
 		if ub.hashes[i] == empty {
 			fmt.Printf("warning, wrote empty hash for position %d\n",
 				ub.positions[i])

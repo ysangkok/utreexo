@@ -26,7 +26,7 @@ var sanity bool = true
 // be in a file, or in ram, or maybe something else.
 type ForestData interface {
 	// returns the hash value at the given position
-	read(pos uint64) Hash
+	Read(pos uint64) Hash
 
 	// writes the given hash at the given position
 	write(pos uint64, h Hash)
@@ -39,7 +39,7 @@ type ForestData interface {
 	swapHashRange(a, b, w uint64)
 
 	// returns how many leaves the current forest can hold
-	size() uint64
+	Size() uint64
 
 	// allocate more space to the forest. newSize should be in leaf count (bottom row of the forest)
 	// can't resize down
@@ -51,65 +51,65 @@ type ForestData interface {
 
 // ********************************************* forest in ram
 
-type ramForestData struct {
-	m []byte
+type RamForestData struct {
+	M []byte
 }
 
 // TODO it reads a lot of empty locations which can't be good
 
-// reads from specified location.  If you read beyond the bounds that's on you
+// reads from specified location.  If you Read beyond the bounds that's on you
 // and it'll crash
-func (r *ramForestData) read(pos uint64) (h Hash) {
+func (r *RamForestData) Read(pos uint64) (h Hash) {
 	// if r.m[pos] == empty {
 	// 	fmt.Printf("\tuseless read empty at pos %d\n", pos)
 	// }
 	pos <<= 5
-	copy(h[:], r.m[pos:pos+leafSize])
+	copy(h[:], r.M[pos:pos+leafSize])
 	return
 }
 
 // writeHash writes a hash.  Don't go out of bounds.
-func (r *ramForestData) write(pos uint64, h Hash) {
+func (r *RamForestData) write(pos uint64, h Hash) {
 	// if h == empty {
 	// 	fmt.Printf("\tWARNING!! write empty at pos %d\n", pos)
 	// }
 	pos <<= 5
-	copy(r.m[pos:pos+leafSize], h[:])
+	copy(r.M[pos:pos+leafSize], h[:])
 }
 
 // TODO there's lots of empty writes as well, mostly in resize?  Anyway could
 // be optimized away.
 
 // swapHash swaps 2 hashes.  Don't go out of bounds.
-func (r *ramForestData) swapHash(a, b uint64) {
+func (r *RamForestData) swapHash(a, b uint64) {
 	r.swapHashRange(a, b, 1) // just calls swap range..
 }
 
 // swapHashRange swaps 2 continuous ranges of hashes.  Don't go out of bounds.
 // fast but uses more ram
-func (r *ramForestData) swapHashRange(a, b, w uint64) {
+func (r *RamForestData) swapHashRange(a, b, w uint64) {
 	// fmt.Printf("swaprange %d %d %d\t", a, b, w)
 	a <<= 5
 	b <<= 5
 	w <<= 5
 	temp := make([]byte, w)
-	copy(temp[:], r.m[a:a+w])
+	copy(temp[:], r.M[a:a+w])
 
-	copy(r.m[a:a+w], r.m[b:b+w])
-	copy(r.m[b:b+w], temp[:])
+	copy(r.M[a:a+w], r.M[b:b+w])
+	copy(r.M[b:b+w], temp[:])
 }
 
-// size gives you the size of the forest
-func (r *ramForestData) size() uint64 {
-	return uint64(len(r.m) / leafSize)
+// Size gives you the Size of the forest
+func (r *RamForestData) Size() uint64 {
+	return uint64(len(r.M) / leafSize)
 }
 
 // resize makes the forest bigger (never gets smaller so don't try)
-func (r *ramForestData) resize(newSize uint64) {
-	r.m = append(r.m, make([]byte, (newSize-r.size())*leafSize)...)
+func (r *RamForestData) resize(newSize uint64) {
+	r.M = append(r.M, make([]byte, (newSize-r.Size())*leafSize)...)
 }
 
-func (r *ramForestData) close() {
+func (r *RamForestData) close() {
 	// nothing to do here fro a ram forest.
 }
 
@@ -685,7 +685,7 @@ func loadCowForest(path string, maxTreeTableCount int) (*cowForest, error) {
 }
 
 // Read takes a position and forestRows to return the Hash of that leaf
-func (cow *cowForest) read(pos uint64) Hash {
+func (cow *cowForest) Read(pos uint64) Hash {
 	// Steps for Read go as such:
 	//
 	// 1. Fetch the relevant treeTable/treeBlock
@@ -817,7 +817,7 @@ func (cow *cowForest) write(pos uint64, h Hash) {
 
 	// sanity checking
 	if sanity {
-		compH := cow.read(pos)
+		compH := cow.Read(pos)
 		if compH != h {
 			fmt.Printf("%x\n", table.memTreeBlocks[treeBlockOffset%treeBlockPerTable].leaves[fetch])
 			err := fmt.Errorf("the hash written doesn't equal what's supposed to be written"+
@@ -833,8 +833,8 @@ func (cow *cowForest) write(pos uint64, h Hash) {
 // swapHash takes in two hashes and atomically swaps them.
 // NOTE The treeBlocks on disk are not changed. commit must be called for that
 func (cow *cowForest) swapHash(a, b uint64) {
-	aHash := cow.read(a)
-	bHash := cow.read(b)
+	aHash := cow.Read(a)
+	bHash := cow.Read(b)
 
 	cow.write(a, bHash)
 	cow.write(b, aHash)
@@ -845,11 +845,11 @@ func (cow *cowForest) swapHashRange(a, b, w uint64) {
 	bHashes := make([]Hash, 0, w+1) // +1 as to include b
 
 	for i := a; i < a+w; i++ {
-		aHashes = append(aHashes, cow.read(i))
+		aHashes = append(aHashes, cow.Read(i))
 	}
 
 	for i := b; i < b+w; i++ {
-		bHashes = append(bHashes, cow.read(i))
+		bHashes = append(bHashes, cow.Read(i))
 	}
 
 	var counter int
@@ -865,7 +865,7 @@ func (cow *cowForest) swapHashRange(a, b, w uint64) {
 	}
 }
 
-func (cow *cowForest) size() uint64 {
+func (cow *cowForest) Size() uint64 {
 	return uint64((2 << cow.manifest.forestRows) - 1)
 }
 
@@ -1118,8 +1118,8 @@ type diskForestData struct {
 	file *os.File
 }
 
-// read ignores errors. Probably get an empty hash if it doesn't work
-func (d *diskForestData) read(pos uint64) Hash {
+// Read ignores errors. Probably get an empty hash if it doesn't work
+func (d *diskForestData) Read(pos uint64) Hash {
 	var h Hash
 	_, err := d.file.ReadAt(h[:], int64(pos*leafSize))
 	if err != nil {
@@ -1138,8 +1138,8 @@ func (d *diskForestData) write(pos uint64, h Hash) {
 
 // swapHash swaps 2 hashes.  Don't go out of bounds.
 func (d *diskForestData) swapHash(a, b uint64) {
-	ha := d.read(a)
-	hb := d.read(b)
+	ha := d.Read(a)
+	hb := d.Read(b)
 	d.write(a, hb)
 	d.write(b, ha)
 }
@@ -1174,8 +1174,8 @@ func (d *diskForestData) swapHashRange(a, b, w uint64) {
 	}
 }
 
-// size gives you the size of the forest
-func (d *diskForestData) size() uint64 {
+// Size gives you the Size of the forest
+func (d *diskForestData) Size() uint64 {
 	s, err := d.file.Stat()
 	if err != nil {
 		fmt.Printf("\tWARNING: %s. Returning 0", err.Error())

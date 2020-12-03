@@ -232,8 +232,8 @@ func (cache *diskForestCache) flush(hashCount uint64) []cacheRange {
 	return entries
 }
 
-// read ignores errors. Probably get an empty hash if it doesn't work
-func (d *cacheForestData) read(pos uint64) Hash {
+// Read ignores errors. Probably get an empty hash if it doesn't work
+func (d *cacheForestData) Read(pos uint64) Hash {
 	var h Hash
 	inCache, cachePos := d.cache.includes(pos, d.hashCount)
 	cacheMissed := false
@@ -287,8 +287,8 @@ func (d *cacheForestData) write(pos uint64, h Hash) {
 
 // swapHash swaps 2 hashes.  Don't go out of bounds.
 func (d *cacheForestData) swapHash(a, b uint64) {
-	ha := d.read(a)
-	hb := d.read(b)
+	ha := d.Read(a)
+	hb := d.Read(b)
 	d.write(a, hb)
 	d.write(b, ha)
 }
@@ -361,8 +361,8 @@ func (d *cacheForestData) swapHashRange(a, b, w uint64) {
 	d.writeRange(a, w, hashesB)
 }
 
-// size gives you the size of the forest
-func (d *cacheForestData) size() uint64 {
+// Size gives you the Size of the forest
+func (d *cacheForestData) Size() uint64 {
 	s, err := d.file.Stat()
 	if err != nil {
 		fmt.Printf("\tWARNING: %s. Returning 0", err.Error())

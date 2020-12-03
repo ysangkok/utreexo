@@ -29,10 +29,10 @@ func HashFromString(s string) Hash {
 	return sha256.Sum256([]byte(s))
 }
 
-// arrow describes the movement of a node from one position to another
-type arrow struct {
-	from, to uint64
-	collapse bool
+// Arrow describes the movement of a node from one position to another
+type Arrow struct {
+	From, To uint64
+	Collapse bool
 }
 
 // Node :

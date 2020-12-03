@@ -2,15 +2,15 @@ package accumulator
 
 // remTrans returns a slice arrow in bottom row to top row.
 // also returns all "dirty" positions which need to be hashed after the swaps
-func remTrans2(dels []uint64, numLeaves uint64, forestRows uint8) [][]arrow {
+func remTrans2(dels []uint64, numLeaves uint64, forestRows uint8) [][]Arrow {
 	// calculate the number of leaves after deletion
 	nextNumLeaves := numLeaves - uint64(len(dels))
 
 	// Initialize swaps and collapses. Swaps are where a leaf should go
 	// collapses are for the roots
-	swaps := make([][]arrow, forestRows)
+	swaps := make([][]Arrow, forestRows)
 	// a bit ugly: collapses also [][], but only have 1 or 0 things per row
-	collapses := make([][]arrow, forestRows)
+	collapses := make([][]Arrow, forestRows)
 
 	// per forest row: 4 operations are executed
 	// sort / extract / swap / root / promote
@@ -56,7 +56,7 @@ func remTrans2(dels []uint64, numLeaves uint64, forestRows uint8) [][]arrow {
 	// merge slice of collapses, placing the collapses at the end of the row
 	// ... is that the right place to put them....?
 	for i, c := range collapses {
-		if len(c) == 1 && c[0].from != c[0].to {
+		if len(c) == 1 && c[0].From != c[0].To {
 			swaps[i] = append(swaps[i], c[0])
 		}
 	}
@@ -106,7 +106,7 @@ func remTrans2(dels []uint64, numLeaves uint64, forestRows uint8) [][]arrow {
 //
 // It is a collapse and not a swap because the position 8 is going to be deleted,
 // and a swap will write into that position.
-func makeCollapse(dels []uint64, delRemains, rootPresent bool, r uint8, numLeaves, nextNumLeaves uint64, forestRows uint8) []arrow {
+func makeCollapse(dels []uint64, delRemains, rootPresent bool, r uint8, numLeaves, nextNumLeaves uint64, forestRows uint8) []Arrow {
 	rootDest := rootPosition(nextNumLeaves, r, forestRows)
 	switch {
 	// root but no del, and del but no root
@@ -114,12 +114,12 @@ func makeCollapse(dels []uint64, delRemains, rootPresent bool, r uint8, numLeave
 	// on the collapses with later rows of swaps
 	case !delRemains && rootPresent:
 		rootSrc := rootPosition(numLeaves, r, forestRows)
-		return []arrow{{from: rootSrc, to: rootDest, collapse: true}}
+		return []Arrow{{From: rootSrc, To: rootDest, Collapse: true}}
 	case delRemains && !rootPresent:
 		// no root but 1 del: sibling becomes root & collapses
 		// in this case, mark as deleted
 		rootSrc := dels[len(dels)-1] ^ 1
-		return []arrow{{from: rootSrc, to: rootDest, collapse: true}}
+		return []Arrow{{From: rootSrc, To: rootDest, Collapse: true}}
 	default:
 		return nil
 	}
@@ -143,38 +143,38 @@ func makeSwapNextDels(dels []uint64, delRemains, rootPresent bool, forestRows ui
 	return swapNextDels
 }
 
-func makeSwaps(dels []uint64, delRemains, rootPresent bool, rootPos uint64) []arrow {
+func makeSwaps(dels []uint64, delRemains, rootPresent bool, rootPos uint64) []Arrow {
 	numSwaps := len(dels) >> 1
 	if delRemains && rootPresent {
 		numSwaps++
 	}
-	rowSwaps := make([]arrow, numSwaps)
+	rowSwaps := make([]Arrow, numSwaps)
 	// *** swap
 	i := 0
 	for ; len(dels) > 1; dels = dels[2:] {
-		rowSwaps[i] = arrow{from: dels[1] ^ 1, to: dels[0]}
+		rowSwaps[i] = Arrow{From: dels[1] ^ 1, To: dels[0]}
 		i++
 	}
 	// *** root
 	if delRemains && rootPresent {
 		// root to del, no collapse / upper del
-		rowSwaps[i] = arrow{from: rootPos, to: dels[0]}
+		rowSwaps[i] = Arrow{From: rootPos, To: dels[0]}
 	}
 	return rowSwaps
 }
 
-func swapInRow(s arrow, collapses [][]arrow, r uint8, forestRows uint8) {
+func swapInRow(s Arrow, collapses [][]Arrow, r uint8, forestRows uint8) {
 	for cr := uint8(0); cr < r; cr++ {
 		if len(collapses[cr]) == 0 {
 			continue
 		}
 		mask := swapIfDescendant(s, collapses[cr][0], r, cr, forestRows)
-		collapses[cr][0].to ^= mask
+		collapses[cr][0].To ^= mask
 	}
 }
 
 // swapCollapses applies all swaps to lower collapses.
-func swapCollapses(swaps, collapses [][]arrow, forestRows uint8) {
+func swapCollapses(swaps, collapses [][]Arrow, forestRows uint8) {
 	// If there is nothing to collapse, we're done
 	if len(collapses) == 0 {
 		return
@@ -200,17 +200,17 @@ func swapCollapses(swaps, collapses [][]arrow, forestRows uint8) {
 // swapIfDescendant checks if a.to or a.from is above b
 // if a.to xor a.from is above b, it will also calculates the new position of b
 // were it swapped to being below the other one.  Returns what to xor b.to.
-func swapIfDescendant(a, b arrow, ar, br, forestRows uint8) (subMask uint64) {
+func swapIfDescendant(a, b Arrow, ar, br, forestRows uint8) (subMask uint64) {
 	// ar= row of a, br= row of b, fr= forest row
 	hdiff := ar - br
 	// a must always be higher than b; we're not checking for that
 	// TODO probably doesn't matter, but it's running upMany every time
 	// isAncestorSwap is called.  UpMany isn't even a loop so who cares.  But
 	// could inline that up to what calls this and have bup as an arg..?
-	bup := parentMany(b.to, hdiff, forestRows)
-	if (bup == a.from) != (bup == a.to) {
+	bup := parentMany(b.To, hdiff, forestRows)
+	if (bup == a.From) != (bup == a.To) {
 		// b.to is below one but not both, swap it
-		rootMask := a.from ^ a.to
+		rootMask := a.From ^ a.To
 		subMask = rootMask << hdiff
 		// fmt.Printf("collapse %d->%d to %d->%d because of %v\n",
 		// b.from, b.to, b.from, b.to^subMask, a)
@@ -223,14 +223,14 @@ func swapIfDescendant(a, b arrow, ar, br, forestRows uint8) (subMask uint64) {
 // TODO optimization: if children move, parents don't need to move.
 // (But siblings might)
 func floorTransform(
-	dels []uint64, numLeaves uint64, forestRows uint8) []arrow {
+	dels []uint64, numLeaves uint64, forestRows uint8) []Arrow {
 	// fmt.Printf("(undo) call remTr %v nl %d fr %d\n", dels, numLeaves, forestRows)
 	swaprows := remTrans2(dels, numLeaves, forestRows)
 	// fmt.Printf("td output %v\n", swaprows)
-	var floor []arrow
+	var floor []Arrow
 	for r, row := range swaprows {
 		for _, a := range row {
-			if a.from == a.to {
+			if a.From == a.To {
 				continue
 				// TODO: why do these even exist?  get rid of them from
 				// removeTransform output?

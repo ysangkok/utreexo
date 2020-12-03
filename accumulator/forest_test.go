@@ -47,7 +47,7 @@ func TestForestAddDel(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("nl %d %s", f.numLeaves, f.ToString())
+		fmt.Printf("nl %d %s", f.NumLeaves, f.ToString())
 	}
 }
 
@@ -89,7 +89,7 @@ func TestCowForestAddDelComp(t *testing.T) {
 				if err != nil {
 					panic(err)
 				}
-				cowstring := fmt.Sprintf("nl %d %s\n", cowF.numLeaves, cowF.ToString())
+				cowstring := fmt.Sprintf("nl %d %s\n", cowF.NumLeaves, cowF.ToString())
 				cowFile.WriteString(cowstring)
 
 				memFile, err := os.OpenFile("memlog",
@@ -98,10 +98,10 @@ func TestCowForestAddDelComp(t *testing.T) {
 					panic(err)
 				}
 
-				memstring := fmt.Sprintf("nl %d %s\n", memF.numLeaves, memF.ToString())
+				memstring := fmt.Sprintf("nl %d %s\n", memF.NumLeaves, memF.ToString())
 				memFile.WriteString(memstring)
 				s := fmt.Sprintf("forests are not equal\n")
-				s += fmt.Sprintf("forestRows in f: %d\n: ", cowF.rows)
+				s += fmt.Sprintf("forestRows in f: %d\n: ", cowF.Rows)
 				s += fmt.Sprintf("wrongPos: %x\n", wrongPos)
 				s += fmt.Sprintf("wrongPosH %x\n", wrongPosH)
 				t.Fatal(s)
@@ -115,7 +115,7 @@ func TestCowForestAddDelComp(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		cowstring := fmt.Sprintf("nl %d %s\n", cowF.numLeaves, cowF.ToString())
+		cowstring := fmt.Sprintf("nl %d %s\n", cowF.NumLeaves, cowF.ToString())
 		cowFile.WriteString(cowstring)
 
 		memFile, err := os.OpenFile("memlog",
@@ -124,10 +124,10 @@ func TestCowForestAddDelComp(t *testing.T) {
 			panic(err)
 		}
 
-		memstring := fmt.Sprintf("nl %d %s\n", memF.numLeaves, memF.ToString())
+		memstring := fmt.Sprintf("nl %d %s\n", memF.NumLeaves, memF.ToString())
 		memFile.WriteString(memstring)
 		s := fmt.Sprintf("forests are not equal\n")
-		s += fmt.Sprintf("forestRows in f: %d\n: ", cowF.rows)
+		s += fmt.Sprintf("forestRows in f: %d\n: ", cowF.Rows)
 		s += fmt.Sprintf("wrongPos: %x\n", wrongPos)
 		s += fmt.Sprintf("wrongPosH %x\n", wrongPosH)
 		t.Fatal(s)
@@ -137,8 +137,8 @@ func TestCowForestAddDelComp(t *testing.T) {
 // checkIfEqual checks if the forest differ returns true for equal and if not, returns
 // the positions and the hashes
 func checkIfEqual(cowF, memF *Forest) (bool, []uint64, []Hash) {
-	cowFH := cowF.rows
-	memFH := memF.rows
+	cowFH := cowF.Rows
+	memFH := memF.Rows
 
 	if cowFH != memFH {
 		panic("forestRows don't equal")
@@ -149,15 +149,15 @@ func checkIfEqual(cowF, memF *Forest) (bool, []uint64, []Hash) {
 		rowlen := uint8(1 << (memFH - h))
 
 		for j := uint8(0); j < rowlen; j++ {
-			if cowF.data.size() != memF.data.size() {
+			if cowF.Data.Size() != memF.Data.Size() {
 				s := fmt.Sprintf("sizes don't equal"+
-					"cow: %d, mem: %d\n", cowF.data.size(), memF.data.size())
+					"cow: %d, mem: %d\n", cowF.Data.Size(), memF.Data.Size())
 				panic(s)
 			}
-			ok := memF.data.size() >= uint64(pos)
+			ok := memF.Data.Size() >= uint64(pos)
 			if ok {
-				memH := memF.data.read(uint64(pos))
-				cowH := cowF.data.read(uint64(pos))
+				memH := memF.Data.Read(uint64(pos))
+				cowH := cowF.Data.Read(uint64(pos))
 				if memH != cowH {
 					s := fmt.Sprintf("hashes aren't equal at gpos: %d "+"mem: %x cow: %x\n", pos, memH, cowH)
 					panic(s)
@@ -193,7 +193,7 @@ func TestCowForestAddDel(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fmt.Printf("nl %d %s\n", cowF.numLeaves, cowF.ToString())
+		fmt.Printf("nl %d %s\n", cowF.NumLeaves, cowF.ToString())
 	}
 }
 
@@ -333,7 +333,7 @@ func addDelFullBatchProof(nAdds, nDels int) error {
 		return err
 	}
 	// check block proof.  Note this doesn't delete anything, just proves inclusion
-	worked, _, _ := verifyBatchProof(bp, f.getRoots(), f.numLeaves, nil)
+	worked, _, _ := verifyBatchProof(bp, f.getRoots(), f.NumLeaves, nil)
 	//	worked := f.VerifyBatchProof(bp)
 
 	if !worked {
@@ -412,7 +412,7 @@ func TestSmallRandomForests(t *testing.T) {
 		deletions := make([]int, len(leavesToDeleteSet))
 		i = 0
 		for leafTxo, _ := range leavesToDeleteSet {
-			deletions[i] = int(f.positionMap[leafTxo.Mini()])
+			deletions[i] = int(f.PositionMap[leafTxo.Mini()])
 			i++
 		}
 		sort.Ints(deletions)

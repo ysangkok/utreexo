@@ -350,7 +350,7 @@ func getRootsReverse(leaves uint64, forestRows uint8) (roots []uint64, rows []ui
 // can also be used with the "to" return discarded to just enumerate a subtree
 // swap tells whether to activate the sibling swap to try to preserve order
 func subTreePositions(
-	subroot uint64, moveTo uint64, forestRows uint8) (as []arrow) {
+	subroot uint64, moveTo uint64, forestRows uint8) (as []Arrow) {
 
 	subRow := detectRow(subroot, forestRows)
 	//	fmt.Printf("node %d row %d\n", subroot, subRow)
@@ -369,7 +369,7 @@ func subTreePositions(
 			// loop left to right
 			f := leftmost + i
 			t := uint64(int64(f) + rowDelta)
-			as = append(as, arrow{from: f, to: t})
+			as = append(as, Arrow{From: f, To: t})
 		}
 	}
 
@@ -390,18 +390,18 @@ func subTreeLeafRange(
 
 // to leaves takes a arrow and returns a slice of arrows that are all the
 // leaf arrows below it
-func (a *arrow) toLeaves(h, forestRows uint8) []arrow {
+func (a *Arrow) toLeaves(h, forestRows uint8) []Arrow {
 	if h == 0 {
-		return []arrow{*a}
+		return []Arrow{*a}
 	}
 
 	run := uint64(1 << h)
-	fromStart := childMany(a.from, h, forestRows)
-	toStart := childMany(a.to, h, forestRows)
+	fromStart := childMany(a.From, h, forestRows)
+	toStart := childMany(a.To, h, forestRows)
 
-	leaves := make([]arrow, run)
+	leaves := make([]Arrow, run)
 	for i := uint64(0); i < run; i++ {
-		leaves[i] = arrow{from: fromStart + i, to: toStart + i}
+		leaves[i] = Arrow{From: fromStart + i, To: toStart + i}
 	}
 
 	return leaves
@@ -435,7 +435,7 @@ func checkSortedNoDupes(s []uint64) bool {
 
 // reverseArrowSlice does what it says.  Maybe can get rid of if we return
 // the slice top-down instead of bottom-up
-func reverseArrowSlice(a []arrow) {
+func reverseArrowSlice(a []Arrow) {
 	for i, j := 0, len(a)-1; i < j; i, j = i+1, j-1 {
 		a[i], a[j] = a[j], a[i]
 	}
@@ -510,7 +510,7 @@ func mergeSortedSlices(a []uint64, b []uint64) (c []uint64) {
 // dedupeSwapDirt is kind of like mergeSortedSlices.  Takes 2 sorted slices
 // a, b and removes all elements of b from a and returns a.
 // in this case b is arrow.to
-func dedupeSwapDirt(a []uint64, b []arrow) []uint64 {
+func dedupeSwapDirt(a []uint64, b []Arrow) []uint64 {
 	maxa := len(a)
 	maxb := len(b)
 	var c []uint64
@@ -521,14 +521,14 @@ func dedupeSwapDirt(a []uint64, b []arrow) []uint64 {
 	idxb := 0
 	for j := 0; j < maxa; j++ {
 		// skip over swap destinations less than current dirt
-		for idxb < maxb && b[idxb].to < a[j] {
+		for idxb < maxb && b[idxb].To < a[j] {
 			idxb++
 		}
 		if idxb == maxb { // done
 			c = append(c, a[j:]...)
 			break
 		}
-		if a[j] != b[idxb].to {
+		if a[j] != b[idxb].To {
 			c = append(c, a[j])
 		}
 	}
