@@ -2,7 +2,6 @@ package accumulator
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -178,11 +177,7 @@ func (f *Forest) removev4(dels []uint64) error {
 	// satisfy the same interface..?  maybe?  that could work...
 	// TODO try that ^^^^^^
 	for r := uint8(0); r < f.Rows; r++ {
-		bef, _ := json.Marshal(hashDirt)
-		rows, _ := json.Marshal(swapRows[r])
 		hashDirt = updateDirt(hashDirt, swapRows[r], f.NumLeaves, f.Rows)
-		aft, _ := json.Marshal(hashDirt)
-		fmt.Printf("updateDirt [%v,%v,%v,%v,%v]\n", string(bef), string(rows), f.NumLeaves, f.Rows, string(aft))
 		for _, swap := range swapRows[r] {
 			f.SwapNodes(swap, r)
 		}
@@ -241,7 +236,7 @@ func makeDestInRow(maybeArrow []Arrow, hashDirt []uint64, rows uint8) (bool, uin
 	return true, hashDest
 }
 
-func (f *Forest) SwapNodes(s Arrow, row uint8) {
+func (f *Forest) SwapNodes(s Arrow, row uint8) bool {
 	if s.From == s.To {
 		// these shouldn't happen, and seems like the don't
 
@@ -252,11 +247,22 @@ func (f *Forest) SwapNodes(s Arrow, row uint8) {
 		f.Data.swapHash(s.From, s.To)
 		f.PositionMap[f.Data.Read(s.To).Mini()] = s.To
 		f.PositionMap[f.Data.Read(s.From).Mini()] = s.From
-		return
+		return true
 	}
 	// fmt.Printf("swapnodes %v\n", s)
 	a := childMany(s.From, row, f.Rows)
 	b := childMany(s.To, row, f.Rows)
+	rowa := detectRow(a, f.Rows)
+	rowb := detectRow(b, f.Rows)
+	if rowa != rowb {
+		panic("row mismatch")
+	}
+	if a == b {
+		//fmt.Println("skipping this", a, s.From, s.To)
+		// TODO this should probably actually panic
+		panic(fmt.Sprintf("how can this happen %v %v %v", s, row, f.Rows))
+		return false
+	}
 	run := uint64(1 << row)
 
 	// happens before the actual swap, so swapping a and b
@@ -273,6 +279,7 @@ func (f *Forest) SwapNodes(s Arrow, row uint8) {
 		b = parent(b, f.Rows)
 		run >>= 1
 	}
+	return true
 }
 
 // reHash hashes new data in the forest based on dirty positions.
@@ -500,8 +507,6 @@ func (f *Forest) reMap(destRows uint8) error {
 	if destRows > f.Rows+1 || (f.Rows > 0 && destRows < f.Rows-1) {
 		return fmt.Errorf("changing by more than 1 not programmed yet")
 	}
-
-	fmt.Printf("remap forest %d rows -> %d rows\n", f.Rows, destRows)
 
 	// for row reduction
 	if destRows < f.Rows {

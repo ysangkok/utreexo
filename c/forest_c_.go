@@ -88,14 +88,15 @@ func FromC(st *C.forest) *accumulator.Forest {
 		return nil
 	}
 	//fmt.Printf("fromC: %v\n", st.num_leaves)
-	f := accumulator.NewForest(nil)
+	f := accumulator.NewForest(nil, false, "", 0)
 	f.NumLeaves = uint64(st.num_leaves)
 	f.Rows = uint8(st.height)
 
-	dat := make([]accumulator.Hash, st.leaves_size)
+	dat := make([]byte, st.leaves_size*32)
 	for i := uint64(0); i < uint64(st.leaves_size); i++ {
 		leafPtr := C.index_leaves(st.leaves, C.uint64_t(i))
-		dat[i] = LeafFor(leafPtr)
+		hash := LeafFor(leafPtr)
+		copy(dat[i*32:], hash[:])
 	}
 
 	ma := make(map[accumulator.MiniHash]uint64)
@@ -154,7 +155,7 @@ func cLeavesToSlice(hashes *C.leaf, numHashes C.size_t) []accumulator.Leaf {
 func fromCTreeOrEmpty(f *C.forest) *accumulator.Forest {
 	var forest *accumulator.Forest
 	if f == nil {
-		forest = accumulator.NewForest(nil)
+		forest = accumulator.NewForest(nil, false, "", 0)
 	} else {
 		forest = FromC(f)
 	}
@@ -196,7 +197,7 @@ func cForestPrepareInsertion(f *C.forest, delta C.uint64_t) *C.forest {
 //export cForestSwapNodes
 func cForestSwapNodes(f *C.forest, from, to uint64, row uint8) *C.forest {
 	forest := fromCTreeOrEmpty(f)
-	if !forest.SwapNodes(accumulator.Arrow{from, to}, row) {
+	if !forest.SwapNodes(accumulator.Arrow{from, to, false}, row) {
 		return nil
 	}
 	return ToC(forest)

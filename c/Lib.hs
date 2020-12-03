@@ -19,7 +19,9 @@ import Prelude hiding (drop, lookup)
 
 import Data.WideWord.Word128 (Word128(Word128), byteSwapWord128, word128Hi64, word128Lo64)
 
-import qualified Crypto.Hash.SHA256 as SHA256
+import Crypto.Hash (Context, SHA512t_256)
+import Crypto.Hash (hashInit, hashUpdate, hashFinalize)
+import qualified Data.ByteArray as BA (convert)
 import Forest
 
 import Data.Binary (Binary(put,get), encode, decode)
@@ -424,10 +426,11 @@ sha256 x =
 sha256t :: Binary a => [a] -> CLeaf
 sha256t x = CLeaf (byteSwapWord128 $ decode f) (byteSwapWord128 $ decode s)
   where
-    ctx0   = SHA256.init
-    ctx    = foldl SHA256.update ctx0 (map (BS.toStrict . encode) x)
-    digest = SHA256.finalize ctx
-    (f, s) = BS.splitAt 16 $ BS.fromStrict digest
+    ctx0 :: Context SHA512t_256
+    ctx0   = hashInit
+    ctx    = foldl hashUpdate ctx0 (map (BS.toStrict . encode) x)
+    digest = hashFinalize ctx
+    (f, s) = BS.splitAt 16 $ BS.fromStrict $ BA.convert digest
 
 parentHash :: CLeaf -> CLeaf -> CLeaf
 parentHash l r =

@@ -106,7 +106,7 @@ prop_delete =
   Hedgehog.property $ do
     let lower :: Word64 = 2 ^ (31 :: Integer)
     let upper :: Word64 = 2 ^ (32 :: Integer) - 1
-    let vals = Gen.set (Range.constantFrom 5 100 100) (Gen.word64 $ Range.constantFrom lower lower upper)
+    let vals = Gen.set (Range.constantFrom 5 5 100) (Gen.word64 $ Range.constantFrom lower lower upper)
     xs <- Hedgehog.forAll vals
 
     let mforest = forestWithLeaves [CLeaf (word64ToWord128 x) 0 | x <- Set.toList xs]

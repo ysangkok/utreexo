@@ -24,7 +24,8 @@ common libs
                      , bytestring
                      , binary
                      , base16-bytestring
-                     , cryptohash-sha256
+                     , cryptonite
+                     , memory
                      , zippers
                      , reanimate
                      , reanimate-svg
