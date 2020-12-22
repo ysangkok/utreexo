@@ -39,7 +39,7 @@ common libs
   include-dirs: /home/janus/go/src/github.com/mit-dci/utreexo/c
   extra-libraries: utreexo
   extra-lib-dirs: /home/janus/go/src/github.com/mit-dci/utreexo/c
-  ghc-options: -Wall
+  ghc-options: -Wall -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields
   ld-options: -Wl,-rpath,/home/janus/go/src/github.com/mit-dci/utreexo/c
 
 
@@ -59,3 +59,13 @@ executable anim
                        GoImplFunctions
                        Lib
                        DiagramsTree
+
+executable remtrans
+  import: libs
+  build-depends: break
+               , containers
+  main-is:             RemtransTest.hs
+  other-modules:       Forest
+                       GoImplFunctions
+                       Lib
+                       Remtrans
