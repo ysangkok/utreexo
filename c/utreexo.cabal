@@ -64,6 +64,7 @@ executable remtrans
   import: libs
   build-depends: break
                , containers
+               , pretty-tree
   main-is:             RemtransTest.hs
   other-modules:       Forest
                        GoImplFunctions
