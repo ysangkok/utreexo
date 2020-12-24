@@ -105,7 +105,7 @@ copyLeaves perfectSubtree newStructure =
     Nothing ->
       fail "could not find destination"
 
--- take an almost filled tree, fill out the remaining nodes, remove the Maybe
+-- take an almost filled tree, fill out the remaining nodes
 fillRemaining :: [Tree (Maybe a)] -> [a] -> [Tree (Maybe a)]
 fillRemaining forest [] = forest
 fillRemaining forest (newVal: newVals) =
@@ -170,8 +170,8 @@ prog perfectStructure dels traceM =
           lift $ put (removedFrom, inserted)
         Nothing -> do
           lift2 $ traceM "ran out of perfect subtrees with no proof, leaves:"
-          -- t2ree has only nodes with proof
-          let leaves :: [a] = fmap fst $ join $ map leavesOnly old
+          let depths = map (fromJust . perfectDepth) perfectStructure
+          let leaves :: [a] = fmap fst $ join $ map (uncurry leavesOnDepth) (zip depths old)
           lift2 $ traceM $ show leaves
           lift2 $ traceM "final, filled with remaining leaves"
           let final :: [Tree (Maybe a)] = fillRemaining new leaves
@@ -179,6 +179,12 @@ prog perfectStructure dels traceM =
           --let noMaybe = fmap (\x -> fmap fromJust x) final
           --lift2 $ traceM (D.drawForest $ fmap (\x -> fmap show (toDat x)) noMaybe)
           break final
+
+
+leavesOnDepth :: Int -> Tree a -> [a]
+leavesOnDepth _ Empty = []
+leavesOnDepth 1 (Node v _ _) = [v]
+leavesOnDepth i (Node _ a b) = leavesOnDepth (i-1) a ++ leavesOnDepth (i-1) b
 
 
 perfectDepth :: Tree a -> Maybe Int
@@ -205,9 +211,7 @@ findSubtrees ordering path w@(Node _ a b) = let
   tb = findSubtrees ordering (path ++ [1]) b
   in
   (case ordering (path,w) of Just _ -> (:) (path,w); Nothing -> id)
-    (case (ta, tb) of
-      (x: _, y: _) | comparing ordering x y == GT -> tb ++ ta
-      _ -> ta ++ tb)
+    ta ++ tb
 findSubtrees _ _ Empty = []
 
 
@@ -230,7 +234,7 @@ main = do
   --print $ (join $ traverse leavesOnly oldStructureWithHaveProof)
   let
     t :: [Tree Int]
-    t = number [emptyTree 2 ()]
+    t = number [emptyTree 2 ()] -- TODO check if 2 is correct for the delPath below
     delPath = intWToIntInt $ fromJust $ goIdxToHaskellPath 2 (fst $ getRootsReverse 4 2) 0 -- (0, [0,0])
       where
       intWToIntInt :: (Int, [Word64]) -> (Int, [Int])
