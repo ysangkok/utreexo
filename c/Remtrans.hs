@@ -10,14 +10,14 @@ module Remtrans where
 
 import Debug.Trace (traceM)
 import Data.Monoid
-import Data.Ord (comparing, Down(Down))
+import Data.Ord (Down(Down))
 import Control.Monad.State.Lazy
 import Prelude hiding (break, last)
 import Data.Maybe
 import Control.Break
 import Lib (getRootsReverse, goIdxToHaskellPath)
 import GHC.Word
-import Control.Lens hiding (Empty, index, filtered)
+import Control.Lens hiding (Empty, index)
 import qualified Data.Tree as D
 import Data.Bits
 import Data.List hiding (break, last)
@@ -51,7 +51,7 @@ hasNoProof = all (not.snd)
 
 removePerfectSubtreeWithNoProof :: [Tree (a, Bool)] -> Maybe (Tree a, [Tree (a, Bool)])
 removePerfectSubtreeWithNoProof forest = do
-  idx <- findInForest (\(_,x) -> if hasNoProof $ leavesOnly x then fmap Down (perfectDepth x) else Nothing) forest
+  idx <- findInForest (\(_,x) -> if hasNoProof $ x ^.. leaves then fmap Down (perfectDepth x) else Nothing) forest
   let foundNoProof = idxToLens idx
   let foundNoProof2 = idxToLens idx
   return $ (fmap fst $ forest ^. foundNoProof, forest & foundNoProof2 .~ Empty)
@@ -86,7 +86,7 @@ idxToLens (a, b) = unsafeSingular (pathToTraversal a b)
 
 
 treeHasOnlyNothing :: Tree (Maybe a) -> Bool
-treeHasOnlyNothing a = length (catMaybes (leavesOnly a)) == 0
+treeHasOnlyNothing a = 0 == lengthOf (leaves . filtered (has _Just)) a
 
 -- takes the sub-tree pointed to by findPerfectSubtree
 --   and partially filled out newStructure
@@ -105,22 +105,18 @@ copyLeaves perfectSubtree newStructure =
     Nothing ->
       fail "could not find destination"
 
--- take an almost filled tree, fill out the remaining nodes
-fillRemaining :: [Tree (Maybe a)] -> [a] -> [Tree (Maybe a)]
-fillRemaining forest [] = forest
-fillRemaining forest (newVal: newVals) =
-  let
-  index (path, Node Nothing Empty Empty) = Just (Down $ length path)
-  index _ = Nothing
-  in
-  case findInForest index forest of
-      Just path ->
-        let lensToFreeSlot = idxToLens path
-        in fillRemaining (forest & lensToFreeSlot . val .~ Just newVal) newVals
-      Nothing -> forest
-
 compose :: (Functor t, Foldable t) => t (b -> b) -> b -> b
 compose = appEndo . foldl1 (<>) . fmap Endo
+
+
+leavesWithNothing :: Traversal' [Tree (Maybe a)] (Maybe a)
+leavesWithNothing = traversed . leaves . filtered (hasn't _Just)
+
+
+leaves :: Applicative f' => (b -> f' b) -> Tree b -> f' (Tree b)
+leaves g (Node z Empty Empty) = Node <$> (g z) <*> (pure Empty) <*> (pure Empty)
+leaves g (Node z l r) = Node z <$> leaves g l <*> leaves g r
+leaves _ Empty = pure Empty
 
 
 prog :: forall m a. (MonadFail m, Show a, Eq a) => [Tree a] -> [(Int, [Int])] -> (String -> m ()) -> m [Tree (Maybe a)]
@@ -139,7 +135,7 @@ prog perfectStructure dels traceM =
     oldStructureWithHaveProof = (compose siblingSetters) oldStructure
     siblingSetters :: [[Tree (a, Bool)] -> [Tree (a, Bool)]]
     siblingSetters = [idxToLens i . val . _2 .~ True | i <- delWithSiblings]
-    leafCountSum = sum $ map (length.leavesOnly) perfectStructure
+    leafCountSum = sum $ map (lengthOf leaves) perfectStructure
     newStructure :: [Tree (Maybe a)]
     newStructure = emptyForest (leafCountSum - length dels) Nothing
     lift2 = lift . lift
@@ -171,10 +167,10 @@ prog perfectStructure dels traceM =
         Nothing -> do
           lift2 $ traceM "ran out of perfect subtrees with no proof, leaves:"
           let depths = map (fromJust . perfectDepth) perfectStructure
-          let leaves :: [a] = fmap fst $ join $ map (uncurry leavesOnDepth) (zip depths old)
-          lift2 $ traceM $ show leaves
+          let leafValues :: [a] = fmap fst $ join $ map (uncurry leavesOnDepth) (zip depths old)
+          lift2 $ traceM $ show leafValues
           lift2 $ traceM "final, filled with remaining leaves"
-          let final :: [Tree (Maybe a)] = fillRemaining new leaves
+          let final :: [Tree (Maybe a)] = new & partsOf leavesWithNothing .~ (map Just leafValues)
           lift2 $ drawForestM final
           --let noMaybe = fmap (\x -> fmap fromJust x) final
           --lift2 $ traceM (D.drawForest $ fmap (\x -> fmap show (toDat x)) noMaybe)
@@ -196,11 +192,6 @@ perfectDepth (Node _ a b) = do
     Just $ 1 + d1
   else
     Nothing
-
-leavesOnly :: Tree a -> [a]
-leavesOnly Empty = []
-leavesOnly (Node a Empty Empty) = [a]
-leavesOnly (Node _ b c) = leavesOnly b ++ leavesOnly c
 
 -- find subtrees that matches predicate.
 -- initially [] can be passed for path (it is an accumulator)
