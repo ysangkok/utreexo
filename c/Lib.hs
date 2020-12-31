@@ -533,30 +533,6 @@ hremove f dels =
 
 
 
--- create GADT tree in the same way Data.Tree.unfoldTree works
-myUnfoldTree :: IForest a => a -> (Pos, Int) -> CBTree CLeaf
-myUnfoldTree a root =
-    let
-      -- node creation helper function for unfolders in the style of Data.Tree.unfoldTree
-      folder :: (Pos, Int) -> (Pos, CLeaf, Maybe ((Pos, Int), (Pos, Int)))
-      folder (position@(Pos idx), row) =
-        let
-          dat = idata a
-          node = dat !! idx
-          firstChild = child (intToCULong idx) (irows a)
-        in
-          if row == 0
-            then (position, node, Nothing) -- don't descend more once we reached height 0
-            else (position, node, Just ((Pos $ firstChild, row - 1), ((Pos $ firstChild .|. 1), row - 1)))
-      (p, lea, maybeChildren) = folder root
-    in
-      case maybeChildren of
-        Nothing -> (CBNode (Height $ ccharToInt $ irows a) p lea CBEmpty CBEmpty)
-        Just (leaf1, leaf2) -> CBNode (Height $ ccharToInt $ irows a) p lea (myUnfoldTree a leaf1) (myUnfoldTree a leaf2)
-
--- create GADT forest in the same way Data.Tree.unfoldForest works
-myUnfoldForest :: IForest a => a -> [(Pos, Int)] -> [CBTree CLeaf]
-myUnfoldForest a = map (myUnfoldTree a)
 
 nodeVal :: Lens' (CBTree a) a
 nodeVal = lens cget cset
@@ -588,51 +564,52 @@ transTree f =
         zipTrans topZipper = topZipper & fromWithin chldr & focus %~ swap
         transd = zipTrans zipping
     in recalcPositions $ head $ sortLeaves [rezip transd]
-
-isLeaf :: Height -> Pos -> Bool
-isLeaf (Height h) (Pos p) = detectRow (intToWord64 p) (intToWord8 h) == 0
-
--- Sort leaf positions, don't touch values
-sortLeaves :: forall a. (Data a, Ord a, Show a, Eq a) => [CBTree a] -> [CBTree a]
-sortLeaves f@((CBNode h _ _ _ _) : _) =
-    -- With partsOf you can only replace values. But we want to replace keys
-    -- f & partsOf (traverse.filtered (`elem` (map snd toSort)))
-    -- .~ sorted
-    map (transformOf uniplate (\org ->
-      case org of
-        CBNode leafHeight p v a b ->
-          case lookup p mapped of
-            Just newPos -> CBNode leafHeight newPos v a b
-            Nothing -> org
-        CBEmpty -> org
-    )) f
   where
-    toSort :: [Pos]
-    toSort = map fst $ f ^@.. backwards traversed . itraversed . indices (isLeaf h)
-    sorted :: [Pos]
-    sorted = sort toSort
-    mapped :: Map Pos Pos
-    mapped = fromList $ zip toSort sorted
-sortLeaves _ = error "must have at least one tree in forest"
+    recalcPos :: Height -> Int -> Int -> Pos
+    recalcPos (Height h) childA childB =
+      if parent (intToWord64 childA) h /= parent (intToWord64 childB) h 
+        then error $ "children do not have same parent: " ++ show (childA, childB)
+        else Pos (word64ToInt $ parent (intToWord64 childA) h)
+    
+    recalcPosInNode :: Data a => (CBTree a) -> Maybe (CBTree a)
+    recalcPosInNode (CBNode hei posi val childA@(CBNode _ (Pos posChildA) _ _ _) childB@(CBNode _ (Pos posChildB) _ _ _)) =
+      let
+        newPos = recalcPos hei posChildA posChildB
+      in
+        if newPos == posi
+          then Nothing
+          else Just (CBNode hei newPos val childA childB)
+    recalcPosInNode _ = Nothing
+    
+    recalcPositions :: Data a => CBTree a -> CBTree a
+    recalcPositions = rewriteOf uniplate recalcPosInNode
 
-recalcPos :: Height -> Int -> Int -> Pos
-recalcPos (Height h) childA childB =
-  if parent (intToWord64 childA) h /= parent (intToWord64 childB) h 
-    then error $ "children do not have same parent: " ++ show (childA, childB)
-    else Pos (word64ToInt $ parent (intToWord64 childA) h)
+    -- Sort leaf positions, don't touch values
+    sortLeaves :: forall a. (Data a, Ord a, Show a, Eq a) => [CBTree a] -> [CBTree a]
+    sortLeaves f@((CBNode h _ _ _ _) : _) =
+        -- With partsOf you can only replace values. But we want to replace keys
+        -- f & partsOf (traverse.filtered (`elem` (map snd toSort)))
+        -- .~ sorted
+        map (transformOf uniplate (\org ->
+          case org of
+            CBNode leafHeight p v a b ->
+              case lookup p mapped of
+                Just newPos -> CBNode leafHeight newPos v a b
+                Nothing -> org
+            CBEmpty -> org
+        )) f
+      where
+        toSort :: [Pos]
+        toSort = map fst $ f ^@.. backwards traversed . itraversed . indices (isLeaf h)
+        sorted :: [Pos]
+        sorted = sort toSort
+        mapped :: Map Pos Pos
+        mapped = fromList $ zip toSort sorted
+    sortLeaves _ = error "must have at least one tree in forest"
 
-recalcPosInNode :: Data a => (CBTree a) -> Maybe (CBTree a)
-recalcPosInNode (CBNode hei posi val childA@(CBNode _ (Pos posChildA) _ _ _) childB@(CBNode _ (Pos posChildB) _ _ _)) =
-  let
-    newPos = recalcPos hei posChildA posChildB
-  in
-    if newPos == posi
-      then Nothing
-      else Just (CBNode hei newPos val childA childB)
-recalcPosInNode _ = Nothing
+    isLeaf :: Height -> Pos -> Bool
+    isLeaf (Height h) (Pos p) = detectRow (intToWord64 p) (intToWord8 h) == 0
 
-recalcPositions :: Data a => CBTree a -> CBTree a
-recalcPositions = rewriteOf uniplate recalcPosInNode
 
 toCBTree :: IForest a => a -> [CBTree CLeaf]
 toCBTree f =
@@ -641,6 +618,24 @@ toCBTree f =
         roots = [(Pos $ word64ToInt rootPos, rowsInThisTree) | (rootPos, rowsInThisTree) <- zip rootPositions rootRows]
     in
         myUnfoldForest f roots
+    where
+        -- create GADT tree in the same way Data.Tree.unfoldTree works
+        myUnfoldTree :: IForest a => (Pos -> CLeaf -> CBTree CLeaf -> CBTree CLeaf -> CBTree CLeaf) -> a -> (Pos, Int) -> CBTree CLeaf
+        myUnfoldTree createNode a (position@(Pos idx), row) =
+            let
+              dat :: [CLeaf] = idata a
+              node :: CLeaf = dat !! idx
+              firstChild :: Int = child (intToCULong idx) (irows a)
+              go :: (Pos, Int) -> CBTree CLeaf
+              go = myUnfoldTree createNode a
+            in
+              if row == 0
+                then createNode position node CBEmpty CBEmpty -- don't descend more once we reached height 0
+                else createNode position node (go (Pos $ firstChild, row - 1)) (go ((Pos $ firstChild .|. 1), row - 1))
+        
+        -- create GADT forest in the same way Data.Tree.unfoldForest works
+        myUnfoldForest :: IForest a => a -> [(Pos, Int)] -> [CBTree CLeaf]
+        myUnfoldForest a = map (myUnfoldTree (CBNode (Height $ ccharToInt $ irows a)) a)
 
 newtype Height = Height Int
   deriving (Show, Eq, Data)

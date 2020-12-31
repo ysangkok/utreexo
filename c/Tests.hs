@@ -4,7 +4,7 @@
 module Main where
 
 import GoImplFunctions (forestWithLeaves, addToForest, swapNodes, printTree)
-import Lib (testLeaves, Pos, toCBTree, tree21, transTree, testLeaves2, updateDirt, Height(..), Pos(..), cbTreeToDataTree, sortLeaves, CBTree(..))
+import Lib (testLeaves, Pos, toCBTree, tree21, transTree, testLeaves2, updateDirt, Height(..), Pos(..), cbTreeToDataTree, CBTree(..))
 import UnitTests (unitTests)
 import PropertyTests (propertyTests)
 import Lib (ppRender)
@@ -100,8 +100,12 @@ main = do
 
         -- TODO make an actual unit test
         let unsorted = [(CBNode (Height 2) (Pos 5) () (CBNode (Height 2) (Pos 3) () CBEmpty CBEmpty) (CBNode (Height 2) (Pos 2) () CBEmpty CBEmpty))]
-        putStrLn "This (below) should show that the positions are swapped. But we are just swapping values..."
-        putStrLn $ show $ map cbTreeToDataTree $ sortLeaves unsorted
+
+        -- These two lines removed because it was the only use of sortLeaves, and that is now scoped
+        -- to transTree in Lib (which is so verbose it could be removed with all its dependencies)
+        --putStrLn "This (below) should show that the positions are swapped."
+        --putStrLn $ show $ map cbTreeToDataTree $ sortLeaves unsorted
+
         --print $ unsorted ^. partsOf (itraversed . _2 . filtered isLeaf)
         die "Trees differed"
 
