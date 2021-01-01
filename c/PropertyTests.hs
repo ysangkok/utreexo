@@ -1,12 +1,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module PropertyTests (propertyTests) where
+module PropertyTests (propertyTests, makeForest) where
 
 import Forest (CLeaf(CLeaf))
 import Lib
-import GoImplFunctions (forestWithLeaves, swapNodes, rows, printTree, hashRow, deleteFromForest)
-import           Hedgehog ((===), annotateShow, annotate)
+import GoImplFunctions (forestWithLeaves, swapNodes, rows, printTree, hashRow, deleteFromForest, Forest)
+import           Hedgehog ((===), annotateShow, annotate, PropertyT)
 import qualified Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
@@ -101,12 +101,11 @@ prop_swapNodes =
     --annotateShow $ length $ idata forest
     toRecord ref === toRecord our
 
-prop_delete :: Hedgehog.Property
-prop_delete =
-  Hedgehog.property $ do
+makeForest :: Monad m => PropertyT m ([CULong], Forest)
+makeForest = do
     let lower :: Word64 = 2 ^ (31 :: Integer)
     let upper :: Word64 = 2 ^ (32 :: Integer) - 1
-    let vals = Gen.set (Range.constantFrom 5 5 100) (Gen.word64 $ Range.constantFrom lower lower upper)
+    let vals = Gen.set (Range.constantFrom 2 2 100) (Gen.word64 $ Range.constantFrom lower lower upper)
     xs <- Hedgehog.forAll vals
 
     let mforest = forestWithLeaves [CLeaf (word64ToWord128 x) 0 | x <- Set.toList xs]
@@ -115,13 +114,20 @@ prop_delete =
       _ -> return ()
     let forest = fromMaybe (error "impossible with discard above") mforest
     annotateShow $ ipositions forest
-    let inserted = intToWord64 $ length xs - 1
+    let forestSize = length xs
+    let inserted = intToWord64 $ forestSize - 1
     -- ToC makes tree be Nothing if emptied. So don't empty it:
-    let dirt = Gen.set (Range.constantFrom 1 1 (length xs - 1)) (Gen.word64 $ Range.constantFrom 0 0 inserted)
-    dirtSet <- Hedgehog.forAll dirt
-    let dirtList :: [CULong] = map word64ToCULong $ Set.toList dirtSet
-    let ref = deleteFromForest forest dirtList
-    let our = hremove          forest dirtList
+    let rem = Gen.set (Range.constantFrom 1 1 (forestSize - 1)) (Gen.word64 $ Range.constantFrom 0 0 inserted)
+    remSet <- Hedgehog.forAll rem
+    let remList :: [CULong] = map word64ToCULong $ Set.toList remSet
+    return (remList, forest)
+
+prop_delete :: Hedgehog.Property
+prop_delete =
+  Hedgehog.property $ do
+    (remList, forest) <- makeForest
+    let ref = deleteFromForest forest remList
+    let our = hremove          forest remList
     toRecord ref === toRecord our
 
 

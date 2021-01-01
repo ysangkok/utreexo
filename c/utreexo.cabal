@@ -70,3 +70,4 @@ executable remtrans
                        GoImplFunctions
                        Lib
                        Remtrans
+                       PropertyTests

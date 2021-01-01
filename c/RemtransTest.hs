@@ -6,17 +6,62 @@ import Data.Maybe (fromJust)
 import System.Exit (die)
 import Data.Set as Set hiding (map, filter, take)
 import Control.Monad (join, unless)
-import Control.Lens ((^..))
+import Control.Lens ((^..), has, _Nothing, lengthOf, traversed, filtered)
 
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
-import Hedgehog (annotate, annotateShow, Property, PropertyName, Group(Group), diff, forAll, checkSequential, property)
+import Hedgehog (annotate, annotateShow, Property, PropertyName, Group(Group), diff, forAll, checkSequential, property, (===))
 
 import Remtrans (number, Tree(..), prog, leaves, findInForest, bitsSet, emptyForest)
+import Lib (toCBTree, CBTree(CBNode, CBEmpty), cuLongToInt, idata)
+import PropertyTests (makeForest)
+import GoImplFunctions (deleteFromForest, printTree)
+import Forest (CLeaf)
 
-filterForNode :: Int -> ([Int], Tree Int) -> Maybe ()
+filterForNode :: Eq a => a -> ([b], Tree a) -> Maybe ()
 filterForNode del (_, Node v _ _) | v == del = Just ()
 filterForNode _ _ = Nothing
+
+toRemTree :: CBTree a -> Tree a
+toRemTree CBEmpty = Empty
+toRemTree (CBNode _ _ v a b) = Node v (toRemTree a) (toRemTree b)
+
+findLeaf :: MonadFail m => [Tree CLeaf] -> CLeaf -> m (Int, [Int])
+findLeaf remTree cleafToDel =
+  let
+    f :: ([Int], Tree CLeaf) -> Maybe () = filterForNode cleafToDel
+    finder :: [Tree CLeaf] -> Maybe (Int, [Int]) = findInForest f
+    found :: Maybe (Int, [Int]) = finder remTree
+  in case found of
+    Nothing -> fail $ "did not find " ++ show cleafToDel ++ " in " ++ show remTree
+    Just x -> return x
+
+prop_sameLeafOrderAfterRemoval :: Property
+prop_sameLeafOrderAfterRemoval =
+  property $ do
+    (toDelete, forest) <- makeForest
+    let
+      Just refDeleted = deleteFromForest forest toDelete
+      intsToDel = map cuLongToInt toDelete
+      tree = map toRemTree (toCBTree forest)
+      leafData = idata forest
+      leavesToDelete = map (leafData !!) intsToDel
+      foundLeaves = map (findLeaf tree) leavesToDelete
+    paths <- sequenceA foundLeaves
+    annotateShow paths
+    ourDeleted <- prog tree paths annotate
+    annotate $ printTree refDeleted
+    0 === lengthOf
+            (traversed
+            . leaves
+            . filtered (has _Nothing))
+            ourDeleted
+    (===)
+      (map (\x -> toRemTree x ^.. leaves)
+           (toCBTree refDeleted))
+      (map (\x -> fmap fromJust $ x ^.. leaves)
+           ourDeleted)
+
   
 prop_removesNotTooMuchNotTooLittle :: Property
 prop_removesNotTooMuchNotTooLittle =
@@ -40,6 +85,7 @@ prop_removesNotTooMuchNotTooLittle =
 
 li :: [(PropertyName, Property)]
 li = [  ("prop_removesNotTooMuchNotTooLittle", prop_removesNotTooMuchNotTooLittle)
+     ,  ("prop_sameLeafOrderAfterRemoval", prop_sameLeafOrderAfterRemoval)
      ]
 
 main :: IO Bool
