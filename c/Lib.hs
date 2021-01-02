@@ -42,6 +42,7 @@ import Data.List.Split (chunksOf)
 import Data.Maybe (catMaybes, listToMaybe, fromMaybe)
 import Data.Bits ((.|.), (.&.), shiftL, shiftR, xor)
 import qualified Data.Tree
+import Data.Tree.Pretty (drawVerticalForest)
 import Data.TreeDiff.Tree (treeDiff, EditTree(EditNode), Edit(Swp, Ins, Cpy, Del))
 import Text.PrettyPrint (render)
 import qualified Text.PrettyPrint as PP
@@ -51,7 +52,7 @@ import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>))
 import Data.Tuple (swap)
 
 import Control.Applicative (liftA2)
-import Control.Monad.State.Lazy (evalState, execState, modify, lift, State)
+import Control.Monad.State.Lazy (evalState, execState, execStateT, modify, lift, State)
 import qualified Control.Monad.State.Lazy as State (get, put)
 import Pipes.Prelude (toListM)
 import Pipes (yield, Producer)
@@ -504,14 +505,15 @@ detectRow position rowsCount =
   in
     h
 
-hremove :: IForest a => a -> [CULong] -> Maybe HForest
-hremove f dels =
-  let
-    nextNumLeaves = inumleaves f - (intToWord64 $ length dels)
-    swapRows = remTrans2 (map cuLongToWord64 dels) (inumleaves f) (ccharToInt $ irows f)
-    (mf, _) = flip execState (itohforest f, []) $
+hremove :: (Monad m, IForest a) => a -> [CULong] -> (String -> m ()) -> m (Maybe HForest)
+hremove f dels traceM = do
+    let nextNumLeaves = inumleaves f - (intToWord64 $ length dels)
+    let swapRows = remTrans2 (map cuLongToWord64 dels) (inumleaves f) (ccharToInt $ irows f)
+    let log = lift . traceM
+    (mf, _) <- flip execStateT (itohforest f, []) $
       forM_ (zip [0..(irows f)-1] swapRows) $ \(r, row) -> do
         (gotten, dirt) <- State.get
+        log (show (gotten, dirt))
         let hashDirt = updateDirt dirt row (word64ToInt $ inumleaves gotten) (ccharToInt $ irows gotten)
         forM_ row $ \pair -> do
           (gotten2, dirt2) <- State.get
@@ -520,16 +522,15 @@ hremove f dels =
         (gotten2, _) <- State.get
         let Just newf = hhashRow gotten2 (map word64ToCULong hashDirt)
         State.put (newf, hashDirt)
-    toRemove = fromList
-        [(miniHash, ()) |
-            x <- [0..(length dels)-1],
-            let intIndex :: Int = (word64ToInt $ inumleaves mf)-(length dels)+x,
-            let cLeaf :: CLeaf = (idata mf) !! intIndex,
-            let miniHash = firstTwelveBytes cLeaf
-        ]
-    cleaned = ipositions mf `difference` toRemove
-  in
-    Just $ HForest cleaned (idata mf) nextNumLeaves (irows mf)
+    let toRemove = fromList
+                       [(miniHash, ()) |
+                           x <- [0..(length dels)-1],
+                           let intIndex :: Int = (word64ToInt $ inumleaves mf)-(length dels)+x,
+                           let cLeaf :: CLeaf = (idata mf) !! intIndex,
+                           let miniHash = firstTwelveBytes cLeaf
+                       ]
+    let cleaned = ipositions mf `difference` toRemove
+    return $ Just $ HForest cleaned (idata mf) nextNumLeaves (irows mf)
 
 
 
@@ -553,8 +554,13 @@ chldr = lens cget cset
         cset (CBNode h p v _ _) (a, b) = CBNode h p v a b
         cset _ _ = error "only works on non-leaves"
 
-printCB :: Show a => CBTree a ->  IO ()
-printCB = putStrLn . Data.Tree.drawTree . (fmap show) . cbTreeToDataTree
+printCB :: forall a. Show a => [CBTree a] -> String
+printCB a =
+  let
+    dTrees :: [Data.Tree.Tree (Height, Pos, a)] = fmap cbTreeToDataTree a
+    strTree :: [Data.Tree.Tree String] = map (fmap show) dTrees
+  in
+    drawVerticalForest strTree
 
 -- swap children of root node using zipper
 --transTree :: I -> I

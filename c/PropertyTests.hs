@@ -11,6 +11,7 @@ import qualified Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 
+import Data.Functor.Identity (runIdentity)
 import Data.Bits ((.|.), shiftL)
 import Data.Binary (encode, decode)
 import Data.Maybe (fromMaybe)
@@ -127,7 +128,7 @@ prop_delete =
   Hedgehog.property $ do
     (remList, forest) <- makeForest
     let ref = deleteFromForest forest remList
-    let our = hremove          forest remList
+    our <- hremove forest remList annotate
     toRecord ref === toRecord our
 
 

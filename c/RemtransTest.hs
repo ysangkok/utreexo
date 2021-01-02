@@ -13,9 +13,8 @@ import qualified Hedgehog.Range as Range
 import Hedgehog (annotate, annotateShow, Property, PropertyName, Group(Group), diff, forAll, checkSequential, property, (===))
 
 import Remtrans (number, Tree(..), prog, leaves, findInForest, bitsSet, emptyForest)
-import Lib (toCBTree, CBTree(CBNode, CBEmpty), cuLongToInt, idata)
+import Lib (hremove, toCBTree, CBTree(CBNode, CBEmpty), cuLongToInt, idata, printCB)
 import PropertyTests (makeForest)
-import GoImplFunctions (deleteFromForest, printTree)
 import Forest (CLeaf)
 
 filterForNode :: Eq a => a -> ([b], Tree a) -> Maybe ()
@@ -40,8 +39,8 @@ prop_sameLeafOrderAfterRemoval :: Property
 prop_sameLeafOrderAfterRemoval =
   property $ do
     (toDelete, forest) <- makeForest
+    Just refDeleted <- hremove forest toDelete annotate
     let
-      Just refDeleted = deleteFromForest forest toDelete
       intsToDel = map cuLongToInt toDelete
       tree = map toRemTree (toCBTree forest)
       leafData = idata forest
@@ -50,7 +49,7 @@ prop_sameLeafOrderAfterRemoval =
     paths <- sequenceA foundLeaves
     annotateShow paths
     ourDeleted <- prog tree paths annotate
-    annotate $ printTree refDeleted
+    annotate $ printCB (toCBTree refDeleted)
     0 === lengthOf
             (traversed
             . leaves
