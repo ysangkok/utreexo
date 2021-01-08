@@ -22,7 +22,7 @@ data CLeaf = CLeaf {
 } deriving (Eq, Ord, Data)
 
 instance Show CLeaf where
-    show (CLeaf one two) = "CLeaf { " ++ showHexWord128 (byteSwapWord128 one) ++ " " ++ showHexWord128 (byteSwapWord128 two) ++ " }"
+    show (CLeaf one two) = "CLeaf { " ++ take 4 (showHexWord128 (byteSwapWord128 one)) ++ " " ++ take 4 (showHexWord128 (byteSwapWord128 two)) ++ " }"
 
 cleafToText :: CLeaf -> T.Text
 cleafToText = T.pack . take 4 . showHexWord128 . byteSwapWord128 . first

@@ -11,7 +11,6 @@ import qualified Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 
-import Data.Functor.Identity (runIdentity)
 import Data.Bits ((.|.), shiftL)
 import Data.Binary (encode, decode)
 import Data.Maybe (fromMaybe)
@@ -23,8 +22,8 @@ import Foreign.C (CULong)
 prop_iso :: Hedgehog.Property
 prop_iso =
   Hedgehog.property $ do
-    let vals1 = Gen.word64 $ Range.constantFrom 1 0 maxBound
-    let vals2 = Gen.word64 $ Range.constantFrom 1 0 maxBound
+    let vals1 = Gen.word64 $ Range.linear 0 maxBound
+    let vals2 = Gen.word64 $ Range.linear 0 maxBound
     v <- Hedgehog.forAll vals1
     w <- Hedgehog.forAll vals2
     let x :: Word128 = ((word64ToWord128 v) `shiftL` 64) .|. (word64ToWord128 w)
@@ -33,7 +32,7 @@ prop_iso =
 prop_hashRow :: Hedgehog.Property
 prop_hashRow =
   Hedgehog.property $ do
-    let vals = Gen.set (Range.constantFrom 10 10 1000) (Gen.word64 $ Range.constantFrom 0 0 1000)
+    let vals = Gen.set (Range.linear 10 1000) (Gen.word64 $ Range.linear 0 1000)
     xs <- Hedgehog.forAll vals
 
     let mforest = forestWithLeaves [CLeaf (word64ToWord128 x) 0 | x <- Set.toList xs]
@@ -43,7 +42,7 @@ prop_hashRow =
     let forest = fromMaybe (error "impossible with discard above") mforest
     annotateShow $ ipositions forest
     let inserted = intToWord64 $ length xs - 1
-    let dirt = Gen.set (Range.constantFrom 1 1 100) (Gen.word64 $ Range.constantFrom inserted inserted (2 ^ (ccharToInteger $ rows forest) - 1))
+    let dirt = Gen.set (Range.linear 1 100) (Gen.word64 $ Range.linear inserted (2 ^ (ccharToInteger $ rows forest) - 1))
     dirtSet <- Hedgehog.forAll dirt
     let dirtList :: [CULong] = map word64ToCULong $ Set.toList dirtSet
     let word8Rows :: Word8 = ccharToWord8 $ rows forest
@@ -69,13 +68,13 @@ prop_hashRow =
 prop_swapNodes :: Hedgehog.Property
 prop_swapNodes =
   Hedgehog.property $ do
-    let vals = Gen.set (Range.constantFrom 3 3 99) (Gen.word64 $ Range.constantFrom 1 1 99)
+    let vals = Gen.set (Range.linear 3 99) (Gen.word64 $ Range.linear 1 99)
     xs <- Hedgehog.forAll vals
     let Just forest = forestWithLeaves [sha256 x | x <- Set.toList xs]
     annotateShow $ rows forest
     annotate $ printTree forest
-    let fromGen = Gen.integral $ Range.constantFrom 1 0 (intToCULong $ 2 ^ (rows forest) - 1)
-    let toGen = Gen.integral $ Range.constantFrom 1 0 (intToCULong $ 2 ^ (rows forest) - 1)
+    let fromGen = Gen.integral $ Range.linear 0 (intToCULong $ 2 ^ (rows forest) - 1)
+    let toGen = Gen.integral $ Range.linear 0 (intToCULong $ 2 ^ (rows forest) - 1)
     (to :: CULong) <- Hedgehog.forAll toGen
     (from :: CULong) <- Hedgehog.forAll fromGen
     let rows64 = ccharToWord8 $ rows forest
@@ -106,7 +105,7 @@ makeForest :: Monad m => PropertyT m ([CULong], Forest)
 makeForest = do
     let lower :: Word64 = 2 ^ (31 :: Integer)
     let upper :: Word64 = 2 ^ (32 :: Integer) - 1
-    let vals = Gen.set (Range.constantFrom 2 2 100) (Gen.word64 $ Range.constantFrom lower lower upper)
+    let vals = Gen.set (Range.linear 2 6) (Gen.word64 $ Range.linear lower upper)
     xs <- Hedgehog.forAll vals
 
     let mforest = forestWithLeaves [CLeaf (word64ToWord128 x) 0 | x <- Set.toList xs]
@@ -118,7 +117,7 @@ makeForest = do
     let forestSize = length xs
     let inserted = intToWord64 $ forestSize - 1
     -- ToC makes tree be Nothing if emptied. So don't empty it:
-    let rem = Gen.set (Range.constantFrom 1 1 (forestSize - 1)) (Gen.word64 $ Range.constantFrom 0 0 inserted)
+    let rem = Gen.set (Range.linear 1 (forestSize - 1)) (Gen.word64 $ Range.linear 0 inserted)
     remSet <- Hedgehog.forAll rem
     let remList :: [CULong] = map word64ToCULong $ Set.toList remSet
     return (remList, forest)

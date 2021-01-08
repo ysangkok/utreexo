@@ -8,20 +8,21 @@
 {-# LANGUAGE RankNTypes #-}
 module Remtrans where
 
+import Data.Foldable
 import Debug.Trace (traceM)
 import Data.Monoid
 import Data.Ord (Down(Down))
 import Control.Monad.State.Lazy
 import Prelude hiding (break, last)
 import Data.Maybe
-import Control.Break
 import Lib (getRootsReverse, goIdxToHaskellPath)
 import GHC.Word
 import Control.Lens hiding (Empty, index)
 import qualified Data.Tree as D
 import Data.Bits
-import Data.List hiding (break, last)
+import Data.List hiding (break)
 import Data.Tree.Pretty
+import Control.Monad.Logic
 
 
 
@@ -49,7 +50,7 @@ hasNoProof :: Foldable t => t (a, Bool) -> Bool
 hasNoProof = all (not.snd)
 
 
-removePerfectSubtreeWithNoProof :: [Tree (a, Bool)] -> Maybe (Tree a, [Tree (a, Bool)])
+removePerfectSubtreeWithNoProof :: [Tree (a, Bool)] -> [(Tree a, [Tree (a, Bool)])]
 removePerfectSubtreeWithNoProof forest = do
   idx <- findInForest (\(_,x) -> if hasNoProof $ x ^.. leaves then fmap Down (perfectDepth x) else Nothing) forest
   let foundNoProof = idxToLens idx
@@ -67,7 +68,7 @@ bitsSet :: FiniteBits a => a -> [Int]
 bitsSet i = [x | x <- [0 .. finiteBitSize i - countLeadingZeros i], testBit i x]
 
 emptyForest :: Int -> a -> [Tree a]
-emptyForest i a = [emptyTree x a | x <- reverse $ bitsSet i]
+emptyForest i a = [emptyTree x a | x <- bitsSet i]
 
 
 
@@ -90,20 +91,15 @@ treeHasOnlyNothing a = 0 == lengthOf (leaves . filtered (has _Just)) a
 
 -- takes the sub-tree pointed to by findPerfectSubtree
 --   and partially filled out newStructure
-copyLeaves :: forall a m. (Eq a, MonadFail m) => Tree a -> [Tree (Maybe a)] -> m [Tree (Maybe a)]
+copyLeaves :: forall a. (Eq a) => Tree a -> [Tree (Maybe a)] -> [[Tree (Maybe a)]]
 copyLeaves perfectSubtree newStructure =
   let
   inserted :: Tree (Maybe a)
   inserted = fmap Just perfectSubtree
-  in
-  case findInForest (\(_,x) -> if treeHasOnlyNothing x && perfectDepth x == perfectDepth perfectSubtree then perfectDepth x else Nothing) newStructure of 
-    Just idx ->
-      let
-      lensToSubtreeWithEmptyLeaves = idxToLens idx
-      in
-      return $ newStructure & lensToSubtreeWithEmptyLeaves .~ inserted
-    Nothing ->
-      fail "could not find destination"
+  in do
+  idx <- findInForest (\(_,x) -> if treeHasOnlyNothing x && perfectDepth x == perfectDepth perfectSubtree then perfectDepth x else Nothing) newStructure
+  let lensToSubtreeWithEmptyLeaves = idxToLens idx
+  return $ newStructure & lensToSubtreeWithEmptyLeaves .~ inserted
 
 compose :: (Functor t, Foldable t) => t (b -> b) -> b -> b
 compose = appEndo . foldl1 (<>) . fmap Endo
@@ -119,7 +115,11 @@ leaves g (Node z l r) = Node z <$> leaves g l <*> leaves g r
 leaves _ Empty = pure Empty
 
 
-prog :: forall m a. (MonadFail m, Show a, Eq a) => [Tree a] -> [(Int, [Int])] -> (String -> m ()) -> m [Tree (Maybe a)]
+listToLogicT :: (Monad m) => [a] -> LogicT m a
+listToLogicT = fold . (fmap return)
+
+
+prog :: forall m a. (Monad m, Show a, Eq a) => [Tree a] -> [(Int, [Int])] -> (String -> m ()) -> m [[[Tree (Maybe a)]]]
 prog perfectStructure dels traceM =
   let
     oldStructure :: [Tree (a, Bool)]
@@ -138,43 +138,43 @@ prog perfectStructure dels traceM =
     leafCountSum = sum $ map (lengthOf leaves) perfectStructure
     newStructure :: [Tree (Maybe a)]
     newStructure = emptyForest (leafCountSum - length dels) Nothing
-    lift2 = lift . lift
-    drawForestM :: (Show b, MonadFail m) => [Tree b] -> m ()
+    drawForestM :: (Show b, Monad m) => [Tree b] -> m ()
     drawForestM removedFrom =
       let
       datatrees = toDat removedFrom
       in
       traceM (drawVerticalForest datatrees)
+    act :: [Tree (a, Bool)] -> [Tree (Maybe a)] -> LogicT m ([Tree (Maybe a)], [Tree (a, Bool)])
+    act old new =
+      ifte (listToLogicT $ removePerfectSubtreeWithNoProof old)
+        (\(subtree, removedFrom) -> do
+          lift $ traceM "removed tree"
+          lift $ drawForestM [subtree]
+          lift $ traceM "forest after removal"
+          lift $ drawForestM removedFrom
+          lift $ traceM "before insertion"
+          lift $ drawForestM new
+          inserted <- listToLogicT $ copyLeaves subtree new
+          lift $ traceM "inserted"
+          lift $ drawForestM inserted
+          act removedFrom inserted)
+        (return (new, old))
   in do
   traceM "initial forest"
   drawForestM oldStructureWithHaveProof
-  flip evalStateT (oldStructureWithHaveProof, newStructure) $
-    loop $ do
-      (old :: [Tree (a, Bool)], new :: [Tree (Maybe a)]) <- lift get
-      let mlens = removePerfectSubtreeWithNoProof old
-      case mlens of
-        Just (subtree, removedFrom) -> do
-          lift2 $ traceM "removed tree"
-          lift2 $ drawForestM [subtree]
-          lift2 $ traceM "forest after removal"
-          lift2 $ drawForestM removedFrom
-          lift2 $ traceM "before insertion"
-          lift2 $ drawForestM new
-          inserted <- lift2 $ copyLeaves subtree new
-          lift2 $ traceM "inserted"
-          lift2 $ drawForestM inserted
-          lift $ put (removedFrom, inserted)
-        Nothing -> do
-          lift2 $ traceM "ran out of perfect subtrees with no proof, leaves:"
-          let depths = map (fromJust . perfectDepth) perfectStructure
-          let leafValues :: [a] = fmap fst $ join $ map (uncurry leavesOnDepth) (zip depths old)
-          lift2 $ traceM $ show leafValues
-          lift2 $ traceM "final, filled with remaining leaves"
-          let final :: [Tree (Maybe a)] = new & partsOf leavesWithNothing .~ (map Just leafValues)
-          lift2 $ drawForestM final
-          --let noMaybe = fmap (\x -> fmap fromJust x) final
-          --lift2 $ traceM (D.drawForest $ fmap (\x -> fmap show (toDat x)) noMaybe)
-          break final
+  let observed :: m [([Tree (Maybe a)], [Tree (a, Bool)])] = observeAllT $ act oldStructureWithHaveProof newStructure
+  endstates <- observed
+  forM endstates $ \(new, old) -> do
+    traceM "ran out of perfect subtrees with no proof, leaves:"
+    let depths = map (fromJust . perfectDepth) perfectStructure
+    forM (permutations $ fmap fst $ join $ map (uncurry leavesOnDepth) (zip depths old)) $ \leafValues -> do
+      traceM $ show leafValues
+      traceM "final, filled with remaining leaves"
+      let final :: [Tree (Maybe a)] = new & partsOf leavesWithNothing .~ (map Just leafValues)
+      drawForestM final
+      --let noMaybe = fmap (\x -> fmap fromJust x) final
+      --lift2 $ traceM (D.drawForest $ fmap (\x -> fmap show (toDat x)) noMaybe)
+      return final
 
 
 leavesOnDepth :: Int -> Tree a -> [a]
@@ -206,14 +206,22 @@ findSubtrees ordering path w@(Node _ a b) = let
 findSubtrees _ _ Empty = []
 
 
-findInForest :: Ord o => (([Int], Tree a) -> Maybe o) -> [Tree a] -> Maybe (Int, [Int])
+findInForest :: forall a o. Ord o => (([Int], Tree a) -> Maybe o) -> [Tree a] -> [(Int, [Int])]
 findInForest ordering forest =
   -- sort on the o, then discard it
-  listToMaybe $ map snd $ sortOn (ordering.fst) $ do
-    (idx, tree) <- zip [0..] forest
-    -- the o is just for ordering
-    o@(path, _) <- findSubtrees ordering [] tree
-    return $ (o, (idx, path))
+  let
+    sorted :: [[(Int, Int, [Int])]]
+    sorted = map (map snd) $ groupBy (\(a, _) (b, _) -> ordering a == ordering b) $
+               sortOn (ordering.fst) $ do
+                 (idx, tree) <- zip [0..] forest
+                 -- the o is just for ordering
+                 o@(path, found) <- findSubtrees ordering [] tree
+                 let Just depth = perfectDepth found
+                 return $ (o, (depth, idx, path))
+  in
+    case sorted of
+      [] -> []
+      (xs : _) -> map (\(_, y, z) -> (y, z)) xs
 
 number :: [Tree ()] -> [Tree Int]
 number inp = fst $ runState (traverse (traverse fun) inp) 0

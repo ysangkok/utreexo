@@ -510,11 +510,13 @@ hremove f dels traceM = do
     let nextNumLeaves = inumleaves f - (intToWord64 $ length dels)
     let swapRows = remTrans2 (map cuLongToWord64 dels) (inumleaves f) (ccharToInt $ irows f)
     let log = lift . traceM
-    (mf, _) <- flip execStateT (itohforest f, []) $
+    traceM ("remtrans result " ++ show swapRows)
+    (mf, finalDirt) <- flip execStateT (itohforest f, []) $
       forM_ (zip [0..(irows f)-1] swapRows) $ \(r, row) -> do
         (gotten, dirt) <- State.get
-        log (show (gotten, dirt))
+        log ("iteration dirt/row: " ++ show (dirt, row))
         let hashDirt = updateDirt dirt row (word64ToInt $ inumleaves gotten) (ccharToInt $ irows gotten)
+        log ("newdirt: " ++ show hashDirt)
         forM_ row $ \pair -> do
           (gotten2, dirt2) <- State.get
           let Just new = hswapNodes gotten2 (word64ToCULong $ fst pair) (word64ToCULong $ snd pair) r
@@ -522,6 +524,7 @@ hremove f dels traceM = do
         (gotten2, _) <- State.get
         let Just newf = hhashRow gotten2 (map word64ToCULong hashDirt)
         State.put (newf, hashDirt)
+    traceM ("final dirt " ++ show finalDirt)
     let toRemove = fromList
                        [(miniHash, ()) |
                            x <- [0..(length dels)-1],
