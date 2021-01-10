@@ -9,18 +9,18 @@
 module Remtrans where
 
 import Data.Foldable
-import Debug.Trace (traceM)
+import qualified Debug.Trace (traceM)
 import Data.Monoid
 import Data.Ord (Down(Down))
 import Control.Monad.State.Lazy
-import Prelude hiding (break, last)
+import Prelude hiding (last)
 import Data.Maybe
 import Lib (getRootsReverse, goIdxToHaskellPath)
 import GHC.Word
 import Control.Lens hiding (Empty, index)
 import qualified Data.Tree as D
 import Data.Bits
-import Data.List hiding (break)
+import Data.List hiding (last)
 import Data.Tree.Pretty
 import Control.Monad.Logic
 
@@ -238,5 +238,5 @@ main = do
       where
       intWToIntInt :: (Int, [Word64]) -> (Int, [Int])
       intWToIntInt (x, y) = (fromIntegral x, map fromIntegral y)
-  deleted <- prog t [delPath] traceM
+  deleted <- prog t [delPath] Debug.Trace.traceM
   print deleted

@@ -3,7 +3,16 @@ module UnitTests (unitTests) where
 import Test.Tasty.HUnit
 import Test.Tasty (TestTree, testGroup)
 
-import Lib
+import Lib hiding (remTrans2, remTransPre)
+import qualified Lib
+
+import Control.Monad.Identity (runIdentity)
+import Data.Word (Word64)
+
+remTrans2 :: [Word64] -> Word64 -> Int -> [[(Word64, Word64)]]
+remTrans2 x y z = runIdentity $ Lib.remTrans2 x y z (\_ -> return ())
+
+remTransPre x y z = runIdentity $ Lib.remTransPre x y z (\_ -> return ())
 
 tests :: TestTree
 tests = testGroup "parentMany/getRootsReverse tests"

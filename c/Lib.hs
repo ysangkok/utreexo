@@ -15,7 +15,7 @@ module Lib where
 
 import Data.Data (Data)
 
-import Prelude hiding (drop, lookup)
+import Prelude hiding (drop, lookup, log)
 
 import Data.WideWord.Word128 (Word128(Word128), byteSwapWord128, word128Hi64, word128Lo64)
 
@@ -24,6 +24,7 @@ import Crypto.Hash (hashInit, hashUpdate, hashFinalize)
 import qualified Data.ByteArray as BA (convert)
 import Forest
 
+import Control.Monad.Identity (runIdentity)
 import Data.Binary (Binary(put,get), encode, decode)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as BS
@@ -52,10 +53,8 @@ import Control.Zipper (fromWithin, rezip, zipper, focus, Top, (:>>))
 import Data.Tuple (swap)
 
 import Control.Applicative (liftA2)
-import Control.Monad.State.Lazy (evalState, execState, execStateT, modify, lift, State)
+import Control.Monad.State.Lazy (execState, execStateT, modify, lift, StateT, evalStateT)
 import qualified Control.Monad.State.Lazy as State (get, put)
-import Pipes.Prelude (toListM)
-import Pipes (yield, Producer)
 import Control.Monad (forM_, unless, mzero)
 import Control.Monad.Loops (whileM_)
 
@@ -328,42 +327,47 @@ merge (x:xs) (y:ys) = if x < y
 merge [] xs = xs
 merge xs [] = xs
 
-remTransPre :: [Word64] -> Word64 -> Int -> ([[(Word64, Word64)]], [Maybe (Word64, Word64)])
-remTransPre dels numLeaves forestRows =
+remTransPre :: forall m. Monad m => [Word64] -> Word64 -> Int -> (String -> m ()) -> m ([[(Word64, Word64)]], [Maybe (Word64, Word64)])
+remTransPre dels numLeaves forestRows traceM =
   let
     nextNumLeaves = numLeaves - (intToWord64 $ length dels)
-    producer :: Producer (([(Word64, Word64)], (Maybe (Word64, Word64)))) (State [Word64]) ()
-    producer =
-      forM_ [0 .. forestRows - 1] $ \row -> do
-        readDels <- lift $ State.get
-        unless (length readDels == 0) $ do
-          let preRootPresent = numLeaves .&. (1 `shiftL` row) /= 0
-          let rootPos = rootPosition numLeaves row forestRows
-          let (gottenDels, rootPresent) = if preRootPresent && last readDels == rootPos
-                                              then (init readDels, False)
-                                              else (readDels, preRootPresent)
-          let (twinNextDels, newDels) = extractTwins gottenDels forestRows
-          let swapNextDels = makeSwapNextDels newDels rootPresent forestRows
-          lift $ State.put $ merge twinNextDels swapNextDels
-          let collapsed = makeCollapse newDels rootPresent row numLeaves nextNumLeaves forestRows
-          let swaps = makeSwaps newDels rootPresent rootPos
-          yield $ (swaps, collapsed)
-    both = evalState (toListM producer) dels
-    padding1 = replicate (forestRows - length both) mzero
-    padding2 = replicate (forestRows - length both) mzero
-  in
-    (map fst both ++ padding1, map snd both ++ padding2)
+    producer :: Int -> StateT [Word64] m (Maybe ([(Word64, Word64)], (Maybe (Word64, Word64))))
+    producer row = do
+      readDels <- State.get
+      let
+        preRootPresent = numLeaves .&. (1 `shiftL` row) /= 0
+        rootPos = rootPosition numLeaves row forestRows
+        (gottenDels, rootPresent) = if preRootPresent && last readDels == rootPos
+                                        then (init readDels, False)
+                                        else (readDels, preRootPresent)
+        (twinNextDels, newDels) = extractTwins gottenDels forestRows
+        swapNextDels = makeSwapNextDels newDels rootPresent forestRows
+        collapsed = makeCollapse newDels rootPresent row numLeaves nextNumLeaves forestRows
+        swaps = makeSwaps newDels rootPresent rootPos
+      if length readDels == 0
+          then return Nothing
+          else do
+            let newState = merge twinNextDels swapNextDels
+            State.put newState
+            lift (traceM ("remTransPre: newState: " ++ show newState))
+            lift (traceM ("remTransPre: swaps/collapsed: " ++ show (swaps, collapsed)))
+            return $ Just (swaps, collapsed)
+  in do
+    evalled <- evalStateT (sequenceA (map producer [0 .. forestRows - 1])) dels
+    let both = catMaybes evalled
+    let padding1 = replicate (forestRows - length both) mzero
+    let padding2 = replicate (forestRows - length both) mzero
+    return (map fst both ++ padding1, map snd both ++ padding2)
 
-remTrans2 :: [Word64] -> Word64 -> Int -> [[(Word64, Word64)]]
-remTrans2 dels numLeaves forestRows =
+remTrans2 :: Monad m => [Word64] -> Word64 -> Int -> (String -> m ()) -> m [[(Word64, Word64)]]
+remTrans2 dels numLeaves forestRows traceM = do
+  (swaps, collapses) <- remTransPre dels numLeaves forestRows traceM
   let
-    (swaps, collapses) = remTransPre dels numLeaves forestRows
     newCollapses = swapCollapses swaps collapses
     f (pair, (Just (from, to))) | from /= to = pair ++ [(from, to)]
     f (pair, _) = pair
     newSwaps = map f (zip swaps newCollapses)
-  in
-    newSwaps
+  return newSwaps
 
 updateDirt :: [Word64] -> [(Word64, Word64)] -> Int -> Int -> [Word64]
 updateDirt hashDirt swapRow numLeaves rowsCount =
@@ -508,7 +512,7 @@ detectRow position rowsCount =
 hremove :: (Monad m, IForest a) => a -> [CULong] -> (String -> m ()) -> m (Maybe HForest)
 hremove f dels traceM = do
     let nextNumLeaves = inumleaves f - (intToWord64 $ length dels)
-    let swapRows = remTrans2 (map cuLongToWord64 dels) (inumleaves f) (ccharToInt $ irows f)
+    swapRows <- remTrans2 (map cuLongToWord64 dels) (inumleaves f) (ccharToInt $ irows f) traceM
     let log = lift . traceM
     traceM ("remtrans result " ++ show swapRows)
     (mf, finalDirt) <- flip execStateT (itohforest f, []) $
@@ -703,7 +707,7 @@ goIdxToHaskellPath forestRows rootPos goIdx = do
 
 delsToHsSwaps :: [Word64] -> Word64 -> CChar -> [[(Path, Path)]]
 delsToHsSwaps dels numLeaves forestRows =
-    (fmap.fmap) (\(x,y) -> (toP x, toP y)) (remTrans2 dels numLeaves (ccharToInt forestRows))
+    (fmap.fmap) (\(x,y) -> (toP x, toP y)) (runIdentity $ remTrans2 dels numLeaves (ccharToInt forestRows) (\_ -> return ()))
   where
     toP x = fromMaybe (error "goToHsPath failed!") $ goIdxToHaskellPath forestRows (fst $ getRootsReverse numLeaves (ccharToInt forestRows)) x
 
